@@ -94,13 +94,11 @@ impl Harness {
 
     /// The harness's trust in the hooks of its user-level file — the gate
     /// without which codex runs no hooks, silently. Every hook reads trusted
-    /// for a harness without hook trust, and when `config` has pm launch the
-    /// harness with the gate bypassed. Only a [`Probe::Fresh`] asks the
+    /// for a harness without hook trust. Only a [`Probe::Fresh`] asks the
     /// harness itself, which can tell a trust outdated by a changed hook.
-    pub fn hook_trust(self, config: &HarnessConfig, home: &Path, probe: Probe) -> HookTrust {
+    pub fn hook_trust(self, home: &Path, probe: Probe) -> HookTrust {
         match self {
             Harness::ClaudeCode | Harness::OpenCode => HookTrust(None),
-            Harness::Codex if config.codex.bypass_hook_trust == Some(true) => HookTrust(None),
             Harness::Codex => HookTrust(Some(codex::hook_trust::HookTrust::read(
                 &codex::home_dir(home),
                 probe == Probe::Fresh,
@@ -117,11 +115,59 @@ impl Harness {
         }
     }
 
-    /// How a user grants the harness's hook trust, for the doctor finding.
-    pub fn hook_trust_remedy(self) -> &'static str {
+    /// How a user grants the harness's hook trust, for the doctor finding,
+    /// by whether `config` holds their consent to pm granting it.
+    pub fn hook_trust_remedy(self, config: &HarnessConfig) -> String {
         match self {
-            Harness::ClaudeCode | Harness::OpenCode => "",
-            Harness::Codex => codex::HOOK_TRUST_REMEDY,
+            Harness::ClaudeCode | Harness::OpenCode => String::new(),
+            Harness::Codex => codex::hook_trust_remedy(self.may_trust_pm_hooks(config)),
+        }
+    }
+
+    /// The global config key holding the user's consent to pm recording
+    /// the harness's trust in pm's hooks; `None` for a harness without
+    /// hook trust.
+    pub fn hook_trust_consent_key(self) -> Option<&'static str> {
+        match self {
+            Harness::ClaudeCode | Harness::OpenCode => None,
+            Harness::Codex => Some(codex::TRUST_CONSENT_KEY),
+        }
+    }
+
+    /// The user's answer at [`hook_trust_consent_key`](Self::hook_trust_consent_key)
+    /// in `config`; `None` while they have given none.
+    pub fn hook_trust_consent(self, config: &HarnessConfig) -> Option<bool> {
+        match self {
+            Harness::ClaudeCode | Harness::OpenCode => None,
+            Harness::Codex => config.codex.trust_pm_hooks,
+        }
+    }
+
+    /// Whether the user consented to pm recording the harness's trust in
+    /// pm's hooks.
+    pub fn may_trust_pm_hooks(self, config: &HarnessConfig) -> bool {
+        self.hook_trust_consent(config) == Some(true)
+    }
+
+    /// Record the harness's trust in pm's hooks at `positions` (event,
+    /// entry, inner hook) of its user-level file, never in any other hook;
+    /// the line to print when it trusted some. Unless `recheck`, the
+    /// harness is asked only when some hook has never been trusted. `None`
+    /// for a harness without hook trust, one not installed, or without the
+    /// user's [consent](Self::may_trust_pm_hooks).
+    pub fn trust_pm_hooks(
+        self,
+        config: &HarnessConfig,
+        home: &Path,
+        positions: &[(&str, usize, usize)],
+        recheck: bool,
+    ) -> crate::error::Result<Option<String>> {
+        match self {
+            _ if !self.may_trust_pm_hooks(config) => Ok(None),
+            Harness::ClaudeCode | Harness::OpenCode => Ok(None),
+            Harness::Codex => {
+                codex::hook_trust::trust_pm_hooks(&codex::home_dir(home), positions, recheck)
+            }
         }
     }
 

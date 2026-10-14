@@ -10,7 +10,7 @@ use crate::commands::skills;
 use crate::error::Result;
 use crate::harness::Probe;
 use crate::state::paths;
-use crate::state::project::harness_config;
+use crate::state::project::{HarnessConfig, harness_config};
 
 /// Project findings about each harness in use's hooks: pm's entries
 /// missing from its user-level file, entries in a shape it would ignore,
@@ -20,18 +20,27 @@ use crate::state::project::harness_config;
 /// writes every supported harness's file: a trust finding for a harness
 /// none of this project's agents run on would be noise.
 pub(super) fn hook_issues(project_root: &Path, probe: Probe) -> Result<Vec<Issue>> {
-    hook_issues_in(project_root, &paths::home_dir()?, probe)
+    hook_issues_in(
+        project_root,
+        &paths::home_dir()?,
+        &harness_config(Some(project_root)),
+        probe,
+    )
 }
 
-/// [`hook_issues`] against an explicit `home`.
-fn hook_issues_in(project_root: &Path, home: &Path, probe: Probe) -> Result<Vec<Issue>> {
+/// [`hook_issues`] against an explicit `home` and `[harness.*]` config.
+fn hook_issues_in(
+    project_root: &Path,
+    home: &Path,
+    config: &HarnessConfig,
+    probe: Probe,
+) -> Result<Vec<Issue>> {
     let worktree_harnesses = worktree_harnesses(project_root)?;
     let (project, global) = agents_configs(project_root)?;
-    let config = harness_config(Some(project_root));
     let mut issues = Vec::new();
     for harness in skills::harnesses_in_use(project_root)? {
         for Problem { kind, message } in
-            harness_check::harness_problems(harness, &config, home, probe)?
+            harness_check::harness_problems(harness, config, home, probe)?
         {
             // The default harness is in use whether or not an agent is on it.
             if kind == ProblemKind::Unusable
@@ -60,7 +69,11 @@ fn hook_issues_in(project_root: &Path, home: &Path, probe: Probe) -> Result<Vec<
                 | ProblemKind::StatusHookUntrusted => Issue {
                     kind: IssueKind::HookUntrusted,
                     message,
-                    fix: Fix::None,
+                    fix: if harness.may_trust_pm_hooks(config) {
+                        Fix::Auto(FixAction::TrustHooks)
+                    } else {
+                        Fix::None
+                    },
                 },
             });
         }
@@ -162,7 +175,13 @@ mod tests {
         let home = dir.path().join("home");
 
         // Not in use: nothing about opencode, whatever is installed.
-        let issues = hook_issues_in(&project_path, &home, Probe::Fresh).unwrap();
+        let issues = hook_issues_in(
+            &project_path,
+            &home,
+            &harness_config(Some(&project_path)),
+            Probe::Fresh,
+        )
+        .unwrap();
         assert!(
             issues.iter().all(|i| !i.message().contains("opencode")),
             "{:?}",
@@ -170,7 +189,13 @@ mod tests {
         );
 
         use_opencode(&project_path, "reviewer", "opencode v2.0.17");
-        let issues = hook_issues_in(&project_path, &home, Probe::Fresh).unwrap();
+        let issues = hook_issues_in(
+            &project_path,
+            &home,
+            &harness_config(Some(&project_path)),
+            Probe::Fresh,
+        )
+        .unwrap();
         assert_eq!(
             messages(&issues, IssueKind::HarnessUnusable),
             vec![
@@ -204,7 +229,13 @@ mod tests {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, content).unwrap();
         }
-        let issues = hook_issues_in(&project_path, &home, Probe::Fresh).unwrap();
+        let issues = hook_issues_in(
+            &project_path,
+            &home,
+            &harness_config(Some(&project_path)),
+            Probe::Fresh,
+        )
+        .unwrap();
         assert!(
             issues.iter().all(|i| !i.message().contains("opencode")),
             "{:?}",
@@ -214,7 +245,13 @@ mod tests {
         // A copy an upgrade has not replaced yet.
         let (index, _) = Harness::OpenCode.plugin_files(&home).remove(0);
         std::fs::write(index, "export default {}").unwrap();
-        let issues = hook_issues_in(&project_path, &home, Probe::Fresh).unwrap();
+        let issues = hook_issues_in(
+            &project_path,
+            &home,
+            &harness_config(Some(&project_path)),
+            Probe::Fresh,
+        )
+        .unwrap();
         assert_eq!(
             messages(&issues, IssueKind::HooksNotInstalled)
                 .iter()
@@ -310,8 +347,9 @@ mod tests {
         // is written by every concurrent `init`): hooks missing, worktrees
         // untrusted.
         let bare_home = dir.path().join("bare-home");
+        let unconsented = HarnessConfig::default();
         let found = hook_kinds(
-            hook_issues_in(&project_path, &bare_home, Probe::Fresh)
+            hook_issues_in(&project_path, &bare_home, &unconsented, Probe::Fresh)
                 .unwrap()
                 .iter(),
         );
@@ -336,8 +374,8 @@ mod tests {
             "{found:?}"
         );
 
-        // --fix installs the hooks and trusts both worktrees; hook trust is
-        // codex's alone to grant, so it remains.
+        // --fix installs the hooks and trusts both worktrees; without the
+        // user's consent, hook trust is not pm's to grant, so it remains.
         let lines = doctor(&project_path, &projects_dir, true, server.name())
             .unwrap()
             .lines();
@@ -348,13 +386,27 @@ mod tests {
             "{lines:?}"
         );
         assert!(hooks_install::is_installed_for(Harness::Codex).unwrap());
-        let found =
-            kinds(&diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap());
+        let findings = diagnose(&project_path, &projects_dir, server.name(), Depth::Quick).unwrap();
+        let found = kinds(&findings);
         assert_eq!(
             found.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
             vec![IssueKind::HookUntrusted; 5],
             "{found:?}"
         );
+        let untrusted = findings
+            .iter()
+            .flat_map(|f| f.issues())
+            .filter(|i| i.kind() == IssueKind::HookUntrusted);
+        for issue in untrusted {
+            assert!(!issue.auto_fixable(), "{}", issue.message());
+            assert!(
+                issue
+                    .message()
+                    .contains("`pm config set --global harness.codex.trust_pm_hooks true`"),
+                "{}",
+                issue.message()
+            );
+        }
         assert!(found[0].1.contains("pm's Stop hook"), "{found:?}");
         assert!(found[1].1.contains("pm's SessionStart hook"), "{found:?}");
         assert!(
@@ -383,6 +435,25 @@ mod tests {
                 .trust_worktree(&trusted_home, &project_path.join(wt))
                 .unwrap();
         }
+        // With consent, --fix records it.
+        let mut consented = HarnessConfig::default();
+        consented.codex.trust_pm_hooks = Some(true);
+        let issues =
+            hook_issues_in(&project_path, &trusted_home, &consented, Probe::Fresh).unwrap();
+        assert_eq!(issues.len(), 5);
+        for issue in &issues {
+            assert_eq!(issue.kind(), IssueKind::HookUntrusted);
+            assert!(issue.auto_fixable(), "{}", issue.message());
+            assert!(
+                issue.message().ends_with(
+                    "run `pm harness hooks install` (or start `codex` once in a trusted \
+                     directory and choose \"Trust all and continue\")"
+                ),
+                "{}",
+                issue.message()
+            );
+        }
+
         let codex_hooks = trusted_home.join(".codex/hooks.json");
         let root = hooks_install::user_hooks_root(Harness::Codex, &trusted_home)
             .unwrap()
@@ -409,7 +480,7 @@ mod tests {
         let existing = std::fs::read_to_string(&config_toml).unwrap();
         std::fs::write(&config_toml, format!("{existing}\n{trust}")).unwrap();
         let found = hook_kinds(
-            hook_issues_in(&project_path, &trusted_home, Probe::Fresh)
+            hook_issues_in(&project_path, &trusted_home, &unconsented, Probe::Fresh)
                 .unwrap()
                 .iter(),
         );
@@ -424,7 +495,7 @@ mod tests {
         )
         .unwrap();
         let found = hook_kinds(
-            hook_issues_in(&project_path, &bare_home, Probe::Fresh)
+            hook_issues_in(&project_path, &bare_home, &unconsented, Probe::Fresh)
                 .unwrap()
                 .iter(),
         );

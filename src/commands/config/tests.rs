@@ -81,6 +81,13 @@ fn refused_writes_leave_the_file_untouched() {
     err(set(&files, Tier::Project, "serve.port", "7001"));
     err(set(&files, Tier::Project, "project.name", "other"));
     err(set(&files, Tier::Project, "harness.codex", "x"));
+    let global_only = err(set(
+        &files,
+        Tier::Project,
+        "harness.codex.trust_pm_hooks",
+        "true",
+    ));
+    assert!(global_only.contains("is global only"), "{global_only}");
     assert!(matches!(
         set(&files, Tier::Project, "agents.harness.reviewer", "aider"),
         Err(PmError::HarnessUnsupported { .. })

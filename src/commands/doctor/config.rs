@@ -12,7 +12,7 @@ use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
 use crate::state::paths;
 use crate::state::project::{
-    AgentsConfig, GlobalConfig, ProjectConfig, WILDCARD_AGENT, harness_config,
+    AgentsConfig, CodexConfig, GlobalConfig, ProjectConfig, WILDCARD_AGENT, harness_config,
     resolve_agent_settings,
 };
 use crate::state::workflow::{self, LEGACY_VANILLA_AGENT, VANILLA_AGENT};
@@ -102,6 +102,87 @@ pub(super) fn harness_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
         }
     }
     Ok(issues)
+}
+
+/// Keys pm does not read where they are set: one a harness no longer
+/// reads, in either config file, or a global-only one in the project's.
+/// Config loading drops or ignores them silently.
+pub(super) fn unread_key_issues(project_root: &Path) -> Vec<Issue> {
+    let mut files = vec![(
+        Tier::Project,
+        paths::pm_dir(project_root).join("config.toml"),
+    )];
+    if let Ok(dir) = paths::global_config_dir() {
+        files.push((Tier::Global, dir.join("config.toml")));
+    }
+    unread_key_issues_in(&files)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tier {
+    Project,
+    Global,
+}
+
+fn unread_key_issues_in(files: &[(Tier, PathBuf)]) -> Vec<Issue> {
+    let retired = Harness::SUPPORTED
+        .iter()
+        .flat_map(|harness| harness.retired_config_keys())
+        .map(|(key, instead)| {
+            (
+                key.to_string(),
+                format!("which pm no longer reads; {instead}"),
+                None,
+            )
+        });
+    let global_only = CodexConfig::GLOBAL_ONLY.iter().map(|name| {
+        let key = format!("harness.codex.{name}");
+        let instead = format!(
+            "which pm reads from the global config only; set it with `pm config set --global \
+             {key} <value>`"
+        );
+        (key, instead, Some(Tier::Project))
+    });
+    let keys: Vec<(String, String, Option<Tier>)> = retired.chain(global_only).collect();
+    let mut issues = Vec::new();
+    for (tier, path) in files {
+        let Some(table) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.parse::<toml::Table>().ok())
+        else {
+            continue;
+        };
+        for (key, why, only_in) in &keys {
+            if only_in.is_some_and(|only| only != *tier) || !has_key(&table, key) {
+                continue;
+            }
+            let tier = match tier {
+                Tier::Project => "project",
+                Tier::Global => "global",
+            };
+            issues.push(Issue {
+                kind: IssueKind::UnreadConfigKey,
+                message: format!(
+                    "{tier} config {} sets `{key}`, {why}",
+                    crate::path_utils::to_portable(path)
+                ),
+                fix: Fix::None,
+            });
+        }
+    }
+    issues
+}
+
+/// Whether `table` holds the dotted `key`.
+fn has_key(table: &toml::Table, key: &str) -> bool {
+    let parts: Vec<&str> = key.split('.').collect();
+    let Some((leaf, parents)) = parts.split_last() else {
+        return false;
+    };
+    parents
+        .iter()
+        .try_fold(table, |t, part| t.get(*part)?.as_table())
+        .is_some_and(|t| t.contains_key(*leaf))
 }
 
 /// The `[agents.*]` tables of the two tiers.
@@ -270,6 +351,53 @@ mod tests {
               not spawn (project [agents.models] row for '*' is bound to claude-code, not \
               opencode — not applied)"
             ]
+        );
+    }
+
+    #[test]
+    fn a_retired_or_misplaced_key_is_reported() {
+        let dir = tempdir().unwrap();
+        let project = dir.path().join("project.toml");
+        let global = dir.path().join("global.toml");
+        std::fs::write(&project, "[harness.codex]\nsandbox = \"read-only\"\n").unwrap();
+        std::fs::write(&global, "[harness.codex]\nbypass_hook_trust = true\n").unwrap();
+        let files = [
+            (Tier::Project, project.clone()),
+            (Tier::Global, global.clone()),
+        ];
+
+        let issues = unread_key_issues_in(&files);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].kind(), IssueKind::UnreadConfigKey);
+        assert!(!issues[0].auto_fixable());
+        let message = issues[0].message();
+        assert!(
+            message.starts_with(&format!(
+                "global config {} sets `harness.codex.bypass_hook_trust`, which pm no longer \
+                 reads",
+                global.display()
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains("`pm config set --global harness.codex.trust_pm_hooks true`"),
+            "{message}"
+        );
+
+        // A global-only key: read from the global file, not the project's.
+        std::fs::write(&global, "[harness.codex]\ntrust_pm_hooks = true\n").unwrap();
+        assert!(unread_key_issues_in(&files).is_empty());
+        std::fs::write(&project, "[harness.codex]\ntrust_pm_hooks = true\n").unwrap();
+        let issues = unread_key_issues_in(&files);
+        assert_eq!(issues.len(), 1);
+        assert!(
+            issues[0].message().starts_with(&format!(
+                "project config {} sets `harness.codex.trust_pm_hooks`, which pm reads from the \
+                 global config only",
+                project.display()
+            )),
+            "{}",
+            issues[0].message()
         );
     }
 

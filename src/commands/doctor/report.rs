@@ -121,6 +121,7 @@ fn run(
 
     let mut entries = Vec::new();
     let mut fixed_count = 0;
+    let mut outcomes = Vec::new();
 
     for finding in &findings {
         if finding.issues.is_empty() {
@@ -133,28 +134,32 @@ fn run(
 
         for issue in &finding.issues {
             let line = match &issue.fix {
-                Fix::Auto(action) if fix => match apply_fix(
-                    action,
-                    project_root,
-                    projects_dir,
-                    &finding.scope,
-                    project_name,
-                    tmux_server,
-                ) {
-                    Ok(notes) => {
-                        fixed_count += 1;
-                        format!(
-                            "  {} — fixed: {}{}",
-                            finding.scope,
-                            issue.message,
-                            agent_spawn::notes_suffix(&notes)
+                Fix::Auto(action) if fix => {
+                    match applied(&mut outcomes, &finding.scope, action, || {
+                        apply_fix(
+                            action,
+                            project_root,
+                            projects_dir,
+                            &finding.scope,
+                            project_name,
+                            tmux_server,
                         )
+                    }) {
+                        Ok(notes) => {
+                            fixed_count += 1;
+                            format!(
+                                "  {} — fixed: {}{}",
+                                finding.scope,
+                                issue.message,
+                                agent_spawn::notes_suffix(&notes)
+                            )
+                        }
+                        Err(e) => format!(
+                            "  {} — fix failed ({}): {}",
+                            finding.scope, e, issue.message
+                        ),
                     }
-                    Err(e) => format!(
-                        "  {} — fix failed ({}): {}",
-                        finding.scope, e, issue.message
-                    ),
-                },
+                }
                 Fix::Skip if fix => format!(
                     "  {} — skipped (ambiguous): {}",
                     finding.scope, issue.message
@@ -172,6 +177,33 @@ fn run(
         fix,
         warnings,
     })
+}
+
+/// Each fix applied so far: its scope, action and what it came to.
+type Outcomes<'a> = Vec<(
+    &'a str,
+    &'a FixAction,
+    std::result::Result<Vec<String>, String>,
+)>;
+
+/// What applying `action` to `scope` came to: applied now, or, when an
+/// earlier finding asked for the same fix, what it came to then — one
+/// hooks install fixes every finding about the hooks.
+fn applied<'a>(
+    outcomes: &mut Outcomes<'a>,
+    scope: &'a str,
+    action: &'a FixAction,
+    apply: impl FnOnce() -> Result<Vec<String>>,
+) -> std::result::Result<Vec<String>, String> {
+    if let Some((_, _, outcome)) = outcomes
+        .iter()
+        .find(|(s, a, _)| *s == scope && *a == action)
+    {
+        return outcome.clone();
+    }
+    let outcome = apply().map_err(|e| e.to_string());
+    outcomes.push((scope, action, outcome.clone()));
+    outcome
 }
 
 /// Apply a single fix action. Returns the notes a respawn or a cleanup
@@ -232,6 +264,9 @@ fn apply_fix(
         }
         FixAction::InstallStopHook => {
             hooks_install::install()?;
+        }
+        FixAction::TrustHooks => {
+            hooks_install::trust_in(&paths::home_dir()?, true)?;
         }
         FixAction::RecordMainBranch { branch } => {
             let mut entry = ProjectEntry::load(projects_dir, project_name)?;

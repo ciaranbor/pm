@@ -480,9 +480,6 @@ pub enum HarnessCommands {
         /// Model id
         #[arg(long)]
         model: Option<String>,
-        /// Run hooks codex has not been told to trust
-        #[arg(long)]
-        bypass_hook_trust: bool,
         /// Session to resume
         #[arg(long, conflicts_with = "fork")]
         resume: Option<String>,

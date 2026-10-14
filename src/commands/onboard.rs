@@ -27,7 +27,7 @@ use crate::commands::skills::{self, GlobalStore};
 use crate::commands::{feat_common, harness_check, hooks_install, init};
 use crate::error::{PmError, Result};
 use crate::fs_utils;
-use crate::harness::Harness;
+use crate::harness::{Harness, HookTrustStatus, Probe};
 use crate::messages;
 use crate::state::agent::AgentRegistry;
 use crate::state::dirs::Dirs;
@@ -113,9 +113,62 @@ pub fn find(projects_dir: &Path, root: &Path) -> Result<Option<PathBuf>> {
 /// Install what `pm init` would — pm's hooks and the global asset tier —
 /// so [`readiness`] judges the harnesses as home's spawn will find them.
 pub fn install(global: &GlobalStore) -> Result<()> {
-    hooks_install::install_in(&global.home, false)?;
+    hooks_install::install_quietly(&global.home)?;
     skills::install_global_in(global)?;
     Ok(())
+}
+
+/// The harnesses to ask the user to let pm trust its hooks in, as
+/// installed under `user_home`.
+pub fn hook_trust_offers(global: &GlobalConfig, user_home: &Path) -> Result<Vec<Harness>> {
+    let mut offers = Vec::new();
+    for &harness in Harness::SUPPORTED {
+        if harness.hook_trust_consent_key().is_none()
+            || harness.hook_trust_consent(&global.harness).is_some()
+            || harness
+                .unusable_reason(&global.harness, Probe::Cached)
+                .is_some()
+        {
+            continue;
+        }
+        let Some(root) = hooks_install::user_hooks_root(harness, user_home)? else {
+            continue;
+        };
+        let trust = harness.hook_trust(user_home, Probe::Fresh);
+        let all_trusted = hooks_install::pm_hook_positions(harness, &root)
+            .into_iter()
+            .all(|(event, entry, hook)| {
+                trust.status(event, entry, hook) == HookTrustStatus::Trusted
+            });
+        if !all_trusted {
+            offers.push(harness);
+        }
+    }
+    Ok(offers)
+}
+
+/// Record the user's answer to pm trusting its hooks in `harness`, so they
+/// are asked once, then on yes trust them; returns what to print.
+pub fn answer_hook_trust(
+    config_dir: &Path,
+    harness: Harness,
+    consent: bool,
+    user_home: &Path,
+) -> Result<Vec<String>> {
+    let Some(key) = harness.hook_trust_consent_key() else {
+        return Ok(Vec::new());
+    };
+    config::set(
+        &global_files(config_dir),
+        Tier::Global,
+        key,
+        &consent.to_string(),
+    )?;
+    let mut lines = vec![format!("Saved {key} = {consent}")];
+    if consent {
+        lines.extend(hooks_install::trust_in(user_home, true)?);
+    }
+    Ok(lines)
 }
 
 /// What stands between the supervisor and a working session on one harness.
@@ -327,6 +380,27 @@ mod tests {
         let says_unlock = |h| not_logged_in(h, &global).contains(crate::keychain::UNLOCK);
         assert_eq!(says_unlock(Harness::ClaudeCode), cfg!(target_os = "macos"));
         assert!(!says_unlock(Harness::OpenCode));
+    }
+
+    #[test]
+    fn hook_trust_is_offered_until_codex_trusts_pms_hooks_or_the_user_answers() {
+        let dir = tempdir().unwrap();
+        let home = dir.path().join("home");
+        let mut global = GlobalConfig::default();
+        assert!(hook_trust_offers(&global, &home).unwrap().is_empty());
+
+        hooks_install::install_in(&home, false).unwrap();
+        assert_eq!(hook_trust_offers(&global, &home).unwrap(), [Harness::Codex]);
+
+        let config_dir = dir.path().join("config");
+        answer_hook_trust(&config_dir, Harness::Codex, false, &home).unwrap();
+        let answered = GlobalConfig::load(&config_dir).unwrap();
+        assert_eq!(answered.harness.codex.trust_pm_hooks, Some(false));
+        assert!(hook_trust_offers(&answered, &home).unwrap().is_empty());
+
+        global.harness.codex.trust_pm_hooks = None;
+        hooks_install::test_support::trust_codex_hooks(&home);
+        assert!(hook_trust_offers(&global, &home).unwrap().is_empty());
     }
 
     #[test]

@@ -85,7 +85,8 @@ pub fn harness_problems(
                 ),
             );
         }
-        let trust = harness.hook_trust(config, home, probe);
+        let trust = harness.hook_trust(home, probe);
+        let remedy = harness.hook_trust_remedy(config);
         let status_of = |event: &str, markers: &[&str]| {
             hooks_install::pm_hook_position(root, event, markers)
                 .map_or(HookTrustStatus::Trusted, |(entry, hook)| {
@@ -117,7 +118,7 @@ pub fn harness_problems(
                 format!(
                     "{harness} {} pm's {event} hook, so it silently does not run: {}",
                     state(trust),
-                    harness.hook_trust_remedy()
+                    remedy
                 ),
             );
         }
@@ -138,7 +139,7 @@ pub fn harness_problems(
                      as busy: {}",
                     state(trust),
                     events.join(", "),
-                    harness.hook_trust_remedy()
+                    remedy
                 ),
             );
         }
@@ -149,7 +150,7 @@ pub fn harness_problems(
                     "{harness} {} pm's guard hook ({event}), so a feature's agents may edit \
                      main's checkout: {}",
                     state(trust),
-                    harness.hook_trust_remedy()
+                    remedy
                 ),
             );
         }
@@ -403,6 +404,7 @@ fn team_problems(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::hooks_install::test_support::trust_codex_hooks;
     use tempfile::tempdir;
 
     fn team(names: &[&str]) -> Vec<String> {
@@ -458,7 +460,7 @@ mod tests {
             &team(&["implementer", "reviewer", "qa"]),
         )
         .unwrap();
-        let remedy = Harness::Codex.hook_trust_remedy();
+        let remedy = Harness::Codex.hook_trust_remedy(&config);
         assert_eq!(
             problems.lines,
             [
@@ -485,8 +487,8 @@ mod tests {
     fn a_team_whose_harnesses_are_all_ready_passes() {
         let dir = tempdir().unwrap();
         let home = home_with_hooks(dir.path());
-        let mut config = opencode_reporting(dir.path(), "opencode v2.0.23");
-        config.codex.bypass_hook_trust = Some(true);
+        trust_codex_hooks(&home);
+        let config = opencode_reporting(dir.path(), "opencode v2.0.23");
         let mut agents = mixed_agents();
         agents.models.insert("qa".into(), "local/qwen".into());
 
@@ -514,13 +516,8 @@ mod tests {
             .unwrap()
             .retain(|e| !e.to_string().contains(hooks_install::PM_GUARD_MARKER));
         std::fs::write(&hooks, root.to_string()).unwrap();
-        let config = HarnessConfig {
-            codex: crate::state::project::CodexConfig {
-                bypass_hook_trust: Some(true),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        trust_codex_hooks(&home);
+        let config = HarnessConfig::default();
 
         let problems = harness_problems(Harness::Codex, &config, &home, Probe::Fresh).unwrap();
         let found: Vec<(ProblemKind, &str)> = problems

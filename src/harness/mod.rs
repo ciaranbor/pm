@@ -35,6 +35,8 @@ mod seams {
 #[cfg(test)]
 pub(crate) use claude_code::inbound::testing as claude_code_inbound_testing;
 pub use codex::host::{CodexHost, run as run_codex_host};
+#[cfg(test)]
+pub(crate) use hook_trust::testing;
 pub use hook_trust::{HookTrust, HookTrustStatus};
 #[cfg(test)]
 pub(crate) use opencode::chat::testing as opencode_testing;

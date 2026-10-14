@@ -117,6 +117,8 @@ pub enum IssueKind {
     /// A harness in use reports a problem with its `[harness.<name>]`
     /// settings.
     HarnessConfigInvalid,
+    /// A config file sets a key pm does not read there.
+    UnreadConfigKey,
     /// A running agent would launch differently now than it did: it runs
     /// on an outdated definition, prompt, config row or never-idle loop.
     AgentLaunchStale,
@@ -165,6 +167,7 @@ enum Fix {
     None,
 }
 
+#[derive(PartialEq)]
 enum FixAction {
     /// Remove the state file (orphaned feature).
     RemoveState,
@@ -183,6 +186,8 @@ enum FixAction {
     UpdateStatus { new_status: FeatureStatus },
     /// Install the pm hooks at the user level.
     InstallStopHook,
+    /// Record the harnesses' trust in pm's hooks, as the user consented to.
+    TrustHooks,
     /// (Re)install the bundled assets into the global tier.
     InstallGlobalAssets,
     /// Recreate a missing worktree from its branch.

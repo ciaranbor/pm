@@ -50,10 +50,16 @@ pub struct CodexConfig {
     /// state paths are always added.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub writable_roots: Option<Vec<String>>,
-    /// Pass `--dangerously-bypass-hook-trust` instead of relying on the
-    /// per-machine interactive hook trust.
+    /// The user's consent to pm recording codex's trust in pm's own hooks
+    /// each time it installs them. Global only: the hooks file is the
+    /// machine's, and so is the trust.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bypass_hook_trust: Option<bool>,
+    pub trust_pm_hooks: Option<bool>,
+}
+
+impl CodexConfig {
+    /// Keys only the global file holds; a project's value is not read.
+    pub const GLOBAL_ONLY: &[&str] = &["trust_pm_hooks"];
 }
 
 /// Resolve the per-harness settings across the two tiers, per key: a set
@@ -79,7 +85,7 @@ pub fn resolve_harness_config(project: &HarnessConfig, global: &HarnessConfig) -
                 .writable_roots
                 .clone()
                 .or_else(|| g.writable_roots.clone()),
-            bypass_hook_trust: p.bypass_hook_trust.or(g.bypass_hook_trust),
+            trust_pm_hooks: g.trust_pm_hooks,
         },
     }
 }
@@ -140,7 +146,7 @@ name = "myapp"
 [harness.codex]
 sandbox = ""
 writable_roots = ["main/target"]
-bypass_hook_trust = true
+trust_pm_hooks = true
 "#,
         )
         .unwrap();
@@ -167,7 +173,8 @@ writable_roots = ["/global/cache"]
                 sandbox: None,
                 approval: Some("on-request".into()),
                 writable_roots: Some(vec!["main/target".into()]),
-                bypass_hook_trust: Some(true),
+                // Global only: the project's consent is not read.
+                trust_pm_hooks: None,
             }
         );
         // An empty project list masks the global roots.
