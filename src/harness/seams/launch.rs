@@ -26,7 +26,7 @@ impl Harness {
         config: &HarnessConfig,
     ) -> Result<PreLaunch> {
         match self {
-            Harness::ClaudeCode => Ok(claude_code::pre_launch(spec)),
+            Harness::ClaudeCode => claude_code::pre_launch(ctx, spec),
             Harness::Codex => Ok(PreLaunch::default()),
             Harness::OpenCode => opencode::pre_launch(ctx, spec, &config.opencode),
         }
@@ -42,7 +42,7 @@ impl Harness {
         pre: &PreLaunch,
     ) -> String {
         match self {
-            Harness::ClaudeCode => claude_code::build_cmd(spec),
+            Harness::ClaudeCode => claude_code::build_cmd(spec, pre),
             Harness::Codex => codex::build_cmd(spec, &config.codex),
             Harness::OpenCode => opencode::build_cmd(spec, &config.opencode, pre),
         }

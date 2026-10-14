@@ -22,11 +22,13 @@
 //! too (`source: compact`), mid-turn and while idle, which is no start
 //! ([`hooks_session_start`](crate::commands::hooks_session_start)).
 //!
-//! An agent kept out of a directory (`SpawnSpec::protected_dirs`) gets a
-//! `--settings` layer with an `Edit` deny rule for it, which holds in every
-//! permission mode and at the symlink-resolved path. It covers Claude Code's
-//! file tools and the shell file commands it recognises (redirects, `sed`,
-//! `tee`), not an arbitrary subprocess such as `cp` (2.1.296).
+//! Every agent gets a `--settings` file allowing pm's own read-only
+//! commands ([`ALLOWED_PM`]). An agent kept out of a directory
+//! (`SpawnSpec::protected_dirs`) gets an `Edit` deny rule for it there,
+//! which holds in every permission mode and at the symlink-resolved path.
+//! It covers Claude Code's file tools and the shell file commands it
+//! recognises (redirects, `sed`, `tee`), not an arbitrary subprocess such
+//! as `cp` (2.1.296).
 //!
 //! A running session picks up edits to the user-level hooks file through
 //! its file watcher (verified on 2.1.272), so a new release's hook entries
@@ -51,9 +53,11 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 
 use crate::error::Result;
+use crate::fs_utils::write_atomic;
 use crate::harness::probe::{self, Probe};
 use crate::harness::spawn::{glob_literal, unguarded_note};
-use crate::harness::{PreLaunch, Projection, ProjectionScope, SpawnSpec, Wake};
+use crate::harness::{LaunchContext, PreLaunch, Projection, ProjectionScope, SpawnSpec, Wake};
+use crate::state::runtime;
 use crate::tmux;
 
 pub(super) const CONFIG_DIR: &str = ".claude";
@@ -140,7 +144,7 @@ pub(super) fn project_assets(
     super::project_by_copy(canonical_root, target_root, PROJECTED_DIRS, scope, dry_run)
 }
 
-pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
+pub(super) fn build_cmd(spec: &SpawnSpec<'_>, pre: &PreLaunch) -> String {
     let SpawnSpec {
         definition,
         session_name,
@@ -152,7 +156,7 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
         model,
         writable_dirs: _,
         edit_dirs,
-        protected_dirs,
+        protected_dirs: _,
     } = *spec;
 
     let mut parts = vec![BINARY.to_string()];
@@ -194,9 +198,11 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
         ));
     }
 
-    if let Some(settings) = protected_settings(protected_dirs) {
+    // A file, not inline JSON: the command is typed into the window's shell,
+    // and macOS cuts a terminal input line at 1024 bytes.
+    if let Some(file) = &pre.settings_file {
         parts.push("--settings".to_string());
-        parts.push(tmux::shell_quote(&settings));
+        parts.push(tmux::shell_quote(&file.to_string_lossy()));
     }
 
     if let Some(session_id) = resume_session {
@@ -217,26 +223,56 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>) -> String {
     parts.join(" ")
 }
 
-/// The settings layer that denies edits under `protected_dirs`: a deny
-/// rule holds in every permission mode, bypassPermissions included. A rule
-/// path is `//` for the filesystem root, so the absolute path follows a
-/// single `/`. `None` when no dir can be named in a rule.
-fn protected_settings(protected_dirs: &[PathBuf]) -> Option<String> {
+/// pm commands that only read, or write the agent's own state, allowed
+/// outright: an allow rule settles a call before auto mode's classifier
+/// sees it, which can otherwise refuse a `pm msg read` because of what the
+/// wake's message preview asks for. Every command in a chained line must
+/// match a rule, so `pm msg read && rm …` still goes to the classifier.
+/// `pm msg send` is left to it, which judges what a send passes on.
+const ALLOWED_PM: &[&str] = &[
+    "Bash(pm msg read)",
+    "Bash(pm msg read *)",
+    "Bash(pm msg list)",
+    "Bash(pm msg list *)",
+    "Bash(pm workflow show)",
+    "Bash(pm workflow show *)",
+    "Bash(pm feat summary path)",
+    "Bash(pm feat status)",
+    "Bash(pm feat status *)",
+];
+
+/// The `--settings` layer: [`ALLOWED_PM`], and a rule denying edits under
+/// each of `protected_dirs`, which holds in every permission mode,
+/// bypassPermissions included. A rule path is `//` for the filesystem
+/// root, so the absolute path follows a single `/`; a dir no rule can name
+/// is left out.
+fn settings(protected_dirs: &[PathBuf]) -> String {
     let deny: Vec<String> = protected_dirs
         .iter()
         .filter_map(|dir| glob_literal(dir))
         .map(|dir| format!("Edit(/{dir}/**)"))
         .collect();
-    (!deny.is_empty()).then(|| json!({"permissions": {"deny": deny}}).to_string())
+    let mut permissions = json!({ "allow": ALLOWED_PM });
+    if !deny.is_empty() {
+        permissions["deny"] = json!(deny);
+    }
+    json!({ "permissions": permissions }).to_string()
 }
 
-/// What a spawn remarks on: protected dirs no rule can name.
-pub(super) fn pre_launch(spec: &SpawnSpec<'_>) -> PreLaunch {
-    PreLaunch {
+/// Write the agent's [`settings`] layer to its runtime dir, and remark on
+/// protected dirs no rule can name.
+pub(super) fn pre_launch(ctx: &LaunchContext<'_>, spec: &SpawnSpec<'_>) -> Result<PreLaunch> {
+    let file = runtime::agent_dir(ctx.project_root, ctx.feature, ctx.agent)?.join(SETTINGS_FILE);
+    write_atomic(&file, settings(spec.protected_dirs).as_bytes())?;
+    Ok(PreLaunch {
         notes: unguarded_note(spec.protected_dirs).into_iter().collect(),
+        settings_file: Some(file),
         ..Default::default()
-    }
+    })
 }
+
+/// The `--settings` file in the agent's runtime dir.
+const SETTINGS_FILE: &str = "claude-settings.json";
 
 /// The installed version's raw string, or `None` when `claude` can't be run.
 pub(super) fn installed_version(probe: Probe) -> Option<String> {
@@ -301,6 +337,10 @@ fn run_probe(arg: &str, probe: Probe) -> std::io::Result<probe::Exit> {
 mod tests {
     use super::*;
 
+    fn cmd(spec: SpawnSpec<'_>) -> String {
+        build_cmd(&spec, &PreLaunch::default())
+    }
+
     #[test]
     fn only_a_session_end_that_ends_the_process_is_an_exit() {
         let end = |reason: &str| {
@@ -323,7 +363,7 @@ mod tests {
 
     #[test]
     fn build_cmd_with_agent() {
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             definition: Some("reviewer"),
             ..Default::default()
         });
@@ -333,7 +373,7 @@ mod tests {
     #[test]
     fn build_cmd_edit_dir_leaves_the_prompt_positional() {
         let dirs = [std::path::PathBuf::from("/proj/.pm/summaries")];
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             prompt: Some("go"),
             edit_dirs: &dirs,
             ..Default::default()
@@ -342,39 +382,56 @@ mod tests {
     }
 
     #[test]
-    fn build_cmd_denies_edits_under_protected_dirs() {
-        let dirs = [PathBuf::from("/proj/main")];
-        let cmd = build_cmd(&SpawnSpec {
+    fn the_settings_file_allows_pm_reads_and_denies_edits_under_protected_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let protected = [PathBuf::from("/proj/main"), PathBuf::from("/p[1]/main")];
+        let spec = SpawnSpec {
             prompt: Some("go"),
-            protected_dirs: &dirs,
+            protected_dirs: &protected,
             ..Default::default()
-        });
+        };
+        let ctx = LaunchContext {
+            project_root: dir.path(),
+            feature: "login",
+            worktree: dir.path(),
+            agent: "implementer",
+        };
+        let pre = pre_launch(&ctx, &spec).unwrap();
+        assert_eq!(pre.notes.len(), 1, "the dir no rule can name");
+        let file = pre.settings_file.clone().unwrap();
         assert_eq!(
-            cmd,
-            r#"claude --settings '{"permissions":{"deny":["Edit(//proj/main/**)"]}}' 'go'"#
+            build_cmd(&spec, &pre),
+            format!(
+                "claude --settings {} 'go'",
+                tmux::shell_quote(&file.to_string_lossy())
+            )
+        );
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            settings["permissions"]["deny"],
+            json!(["Edit(//proj/main/**)"])
+        );
+        assert_eq!(settings["permissions"]["allow"], json!(ALLOWED_PM));
+        let allow = settings["permissions"]["allow"].as_array().unwrap();
+        assert!(
+            !allow
+                .iter()
+                .any(|r| r.as_str().unwrap().contains("msg send")),
+            "a send is left to the classifier"
         );
     }
 
     #[test]
-    fn a_protected_dir_no_rule_can_name_is_left_out_and_noted() {
-        let dirs = [PathBuf::from("/p[1]/main")];
-        let spec = SpawnSpec {
-            protected_dirs: &dirs,
-            ..Default::default()
-        };
-        assert_eq!(build_cmd(&spec), "claude");
-        assert_eq!(pre_launch(&spec).notes.len(), 1);
-    }
-
-    #[test]
     fn build_cmd_plain_session() {
-        let cmd = build_cmd(&SpawnSpec::default());
+        let cmd = cmd(SpawnSpec::default());
         assert_eq!(cmd, "claude");
     }
 
     #[test]
     fn build_cmd_plain_session_with_permission() {
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             permission_mode: Some("acceptEdits"),
             ..Default::default()
         });
@@ -383,7 +440,7 @@ mod tests {
 
     #[test]
     fn build_cmd_with_context() {
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             definition: Some("reviewer"),
             prompt: Some("review the auth module"),
             ..Default::default()
@@ -393,7 +450,7 @@ mod tests {
 
     #[test]
     fn build_cmd_with_resume() {
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             definition: Some("reviewer"),
             resume_session: Some("abc123"),
             ..Default::default()
@@ -403,7 +460,7 @@ mod tests {
 
     #[test]
     fn build_cmd_with_context_and_resume() {
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             definition: Some("reviewer"),
             prompt: Some("continue review"),
             resume_session: Some("abc123"),
@@ -417,7 +474,7 @@ mod tests {
 
     #[test]
     fn build_cmd_with_permission_mode() {
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             definition: Some("implementer"),
             permission_mode: Some("acceptEdits"),
             ..Default::default()
@@ -432,7 +489,7 @@ mod tests {
     fn build_cmd_with_append_prompt_file() {
         // The baseline path is appended right after `--agent` and is
         // shell-quoted so paths with spaces survive.
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             definition: Some("reviewer"),
             append_prompt_file: Some("/proj/main/.agents/pm-baseline.md"),
             ..Default::default()
@@ -446,7 +503,7 @@ mod tests {
     #[test]
     fn build_cmd_with_fork_session() {
         // `--fork-session` only emits when paired with `--resume`.
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             definition: Some("reviewer"),
             resume_session: Some("abc123"),
             fork_session: true,
@@ -462,7 +519,7 @@ mod tests {
     fn build_cmd_fork_session_without_resume_is_noop() {
         // `--fork-session` requires `--resume` per claude's CLI; we drop it
         // silently rather than emit a broken command.
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             definition: Some("reviewer"),
             fork_session: true,
             ..Default::default()
@@ -473,7 +530,7 @@ mod tests {
     #[test]
     fn build_cmd_with_model() {
         // Quoted, so a bracketed context suffix survives the interactive shell.
-        let cmd = build_cmd(&SpawnSpec {
+        let cmd = cmd(SpawnSpec {
             definition: Some("reviewer"),
             model: Some("claude-opus-4-8[1m]"),
             ..Default::default()

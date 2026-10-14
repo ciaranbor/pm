@@ -40,16 +40,21 @@ fn spawn_builds_the_command_through_the_real_shell() {
             .to_string_lossy()
             .to_string(),
         format!("--add-dir={}", s.proj().join(".pm/summaries").display()),
-        // A feature's agent is kept out of main's checkout.
         "--settings".into(),
-        serde_json::json!({"permissions": {"deny": [format!(
-            "Edit(/{}/**)",
-            s.proj().join("main").canonicalize().unwrap().display()
-        )]}})
-        .to_string(),
     ]
     .into();
-    assert_eq!(rec.argv, expected);
+    let (settings_file, argv) = rec.argv.split_last().unwrap();
+    assert_eq!(argv, expected);
+    // A feature's agent is kept out of main's checkout.
+    let settings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(settings_file).unwrap()).unwrap();
+    assert_eq!(
+        settings["permissions"]["deny"],
+        serde_json::json!([format!(
+            "Edit(/{}/**)",
+            s.proj().join("main").canonicalize().unwrap().display()
+        )])
+    );
     assert_eq!(rec.agent_name, "reviewer");
     assert_eq!(Path::new(&rec.cwd), login);
 }
