@@ -143,8 +143,9 @@ android/gradlew -p android ktfmtFormat lint test assembleRelease  # when android
 run --` only to test local, uncommitted changes.
 
 Before completing any task, always run:
-`cargo fmt && cargo clippy --all-targets && cargo test && cargo doc --no-deps`
-— the last must emit no warnings. `cargo test` needs `node` 22.18+
+`cargo fmt && cargo clippy --all-targets && cargo test && cargo doc --no-deps
+&& cargo test --test smoke -- --ignored` — `cargo doc` must emit no warnings,
+and the smoke suite runs nowhere else. `cargo test` needs `node` 22.18+
 (opencode plugin).
 
 **Important:** Tests create real tmux sessions that consume ptys; a
