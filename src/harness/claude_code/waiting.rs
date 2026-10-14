@@ -18,7 +18,17 @@
 //!   with no type of its own (the auto-mode setup proposal, verified on
 //!   2.1.296) reports `permission_prompt`, may open between turns, and fires
 //!   nothing when it closes: the transcript says so
-//!   ([`super::transcript::dialog_closed`]).
+//!   ([`super::transcript::dialog_closed`]), unless a wake ran a turn
+//!   through it or its scan was aborted; then only the screen does
+//!   ([`super::screen`]).
+//! - Nothing fires for the "Teach auto mode about your environment?" offer
+//!   (2.1.296). It opens as a turn ends, at most once a session, in auto
+//!   mode once the global config counts five auto-mode denials and five
+//!   startups, unless dismissed for good or in the last 7 days; opening it
+//!   writes nothing. Each answer, Esc included, writes the global config's
+//!   `autoModeEnvSetup`; Yes opens `/auto-mode-setup`. pm reads it off
+//!   the screen ([`super::screen`]) only over an idle marker: drawn while
+//!   background work runs, the agent reads `background`.
 //! - `StopFailure` fires instead of Stop when an API error ends the turn.
 //! - `PermissionDenied` fires when the auto-mode classifier refuses a tool
 //!   call, and for nothing else: not a denial at a dialog, a PreToolUse

@@ -40,6 +40,15 @@ pub use fake_socket::FakeSocket;
 pub use home::test_home;
 pub use tmux_server::{OwnServer, TestServer, server_socket_exists};
 
+/// The screen captured in `tests/fixtures/screens/<name>.txt`.
+pub fn screen_fixture(name: &str) -> String {
+    let path = format!(
+        "{}/tests/fixtures/screens/{name}.txt",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::read_to_string(path).unwrap()
+}
+
 /// Process-wide lock guarding the global current working directory.
 ///
 /// CWD is process-global, but `cargo test` runs tests in parallel within a

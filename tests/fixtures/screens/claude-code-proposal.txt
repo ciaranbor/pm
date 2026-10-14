@@ -1,0 +1,40 @@
+  [38;5;246m  User-specific[39m
+    · **Primary use of Claude Code**: software development
+    · **Trusted repo**: The git repository the agent started in (its working directory) at
+  /private/var/folders/8t/cq4nbd8n3592tr_l1yg6lqv80000gp/T/pm-test-home-ccdlg/play — note this repo currently has no
+  tracked files and no git remotes configured
+    · **Org-specific CLIs**: None configured
+
+  [1mAllow carve-outs[0m
+  [38;5;246m none suggested — defaults look like they cover your usage
+[39m
+  [1mExtra soft blocks[0m
+  [38;5;246m none suggested[39m
+
+  [1mExtra hard blocks[0m
+  [38;5;246m none suggested[39m
+
+  [1mNotes[0m
+  [38;5;246m  · Repo facts show zero tracked files and no git remotes — this is an essentially empty repo, so [39m
+  [38;5;246mtrust/source-control scoping is minimal by evidence, not by omission[39m
+  [38;5;246m  · Repo visibility & branch protection: not queryable (no remote to derive owner/repo from) — left at shipped [39m
+  [38;5;246mdefault (assume private)[39m
+  [38;5;246m  · Sibling repo docs: NOT GATHERED — user selected just-this-project scope[39m
+  [38;5;246m  · Other git repos under home directory: NOT GATHERED — user selected just-this-project scope[39m
+  [38;5;246m  · Recent usage across all projects: NOT GATHERED — user selected just-this-project scope[39m
+  [38;5;246m  · Config scans: nothing found — Trusted cloud buckets left at shipped default (None configured)[39m
+  [38;5;246m  · Shell history: complete, 0 files read, no command words — no allow/soft_deny/hard_deny carve-outs proposed from [39m
+  [38;5;246mthis source[39m
+  [38;5;246m  · Transcripts scanned: 1 with 0 Bash commands seen — no usage evidence to support allow/soft_deny/hard_deny [39m
+  [38;5;246mcarve-outs[39m
+  [38;5;246m  · Existing auto-mode settings: no settings file, no classifier-bypassing or destructive entries found — [39m
+  [38;5;246mremove_from_permissions_allow left empty[39m
+  [38;5;246m  · Organization, Cloud provider(s), Internal sharing, Secrets management, CI/CD deploy targets, Network posture, [39m
+  [38;5;246mHost containment, Trusted internal domains, Trusted cloud buckets, Key internal services, Internal package registry,[39m
+  [38;5;246mData retention/declassification, Protected deployment namespaces, Org-specific CLIs all left at shipped defaults — [39m
+  [38;5;246mno signal found[39m
+
+  [38;5;153m❯[39m [38;5;153mLooks good — save it[39m
+    Discard and exit
+
+  [3m[38;5;246mEnter to confirm · Esc to cancel[0m

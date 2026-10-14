@@ -26,6 +26,7 @@
 //! signal when a turn it did not prompt starts, and waits again once that
 //! turn ends.
 
+mod screen;
 mod wake;
 
 pub(crate) use wake::is_loop_notice;

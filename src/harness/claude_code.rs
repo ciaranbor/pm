@@ -41,6 +41,7 @@ pub(super) mod dialog;
 pub(super) mod inbound;
 pub(super) mod input;
 pub(super) mod mode;
+pub(super) mod screen;
 pub(super) mod sessions;
 pub(super) mod transcript;
 pub(super) mod waiting;

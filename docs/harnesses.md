@@ -42,9 +42,10 @@ file of every supported harness (`~/.claude/settings.json` for Claude Code,
   API error ended, nor the closing of a Claude Code dialog only a
   notification reported (the auto-mode setup proposal); pm reads those from the
   tail of the session's transcript instead. Claude Code's "Teach auto mode
-  about your environment?" offer fires no hook at all, so the agent reads
-  `idle` while it is up and a message still wakes it; remote input refuses
-  to type while it shows over the input line.
+  about your environment?" offer fires no hook at all, so the waiter reads
+  it, and the proposal's closing, off the agent's screen between turns: the
+  agent reads `asking` while either is up, though a message still wakes
+  it; remote input refuses to type while one shows over the input line.
   On Claude Code it also records a tool call auto mode refused, which
   reads `denied` once the agent is between turns, until it is next
   prompted.

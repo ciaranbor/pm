@@ -1,0 +1,40 @@
+  yet somehow it is always
+
+  [3m(Heraclitus stanza here, the "can't step in twice" bit, but less obvious)[0m
+
+  At dusk it holds the burning sky,
+  the swallows stitching low and high,
+  the heron, still as
+
+  It floods, it rages, then it
+  it cradles cities in its
+
+  I think the river understands
+  what slips so easily through
+
+  [3mending: sea as friend, not wall?? or just stop at "let go"
+[0m
+  Teach me, river, how to
+
+  If you meant something else, like your message got sent before you finished typing, just send the rest.
+
+[38;5;246m✻[39m [38;5;246mCrunched for 6s · done 2:58[39m
+
+[38;5;246m[48;5;237m❯ [38;5;231msay ok[39m
+[49m
+[38;5;231m⏺[39m Ok
+
+[38;5;246m✻[39m [38;5;246mBrewed for 1s · done 2:59[39m
+[38;5;153m▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+[39m   [1m[38;5;153mTeach auto mode about your environment?[0m
+
+   Claude Code reads this project, your recent Claude sessions, and optionally your shell history and other
+   repositories. Claude analyzes this data and customizes auto mode to make better decisions.
+
+     How you use Claude here     Mixed
+   [38;5;153m❯[39m [38;5;153mAlso scan shell history[39m     [38;5;153mtrue[39m
+     Also scan your other repos  false
+
+     Continue
+
+   [3m[38;5;246m←/→ to change · Enter to continue · Esc to cancel[0m

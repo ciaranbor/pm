@@ -18,9 +18,8 @@
 //! caller that types only into an empty box errs towards leaving it alone.
 //! So does a box with a dialog drawn right above it, its footer (`Enter to
 //! confirm · Esc to cancel`) on the box's upper rule: the dialog has the
-//! keyboard, and Enter there picks its option. "Teach auto mode about your
-//! environment?" is drawn so on a resumed session; after a turn it is drawn
-//! below the box, where its own `❯` is the last one (verified on 2.1.296).
+//! keyboard, and Enter there picks its option. A dialog drawn below the box
+//! has its own `❯` last ([`super::screen`] has both layouts).
 
 use std::path::Path;
 
