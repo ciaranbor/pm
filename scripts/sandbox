@@ -39,17 +39,18 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
                                 test binary's pid-named one
 
   -n NAME    sandbox name (default: "default", or $PM_SANDBOX)
-  --real     real claude/codex/opencode instead of shims, with
-             ~/.claude.json and ~/.codex/auth.json copied in. Claude Code
+  --real     real claude/codex/opencode instead of shims, with ~/.claude.json
+             and ~/.codex/auth.json copied in (Claude Code's "Teach auto mode"
+             offer turned off, so a run never meets it unasked). Claude Code
              credentials are not copied: the sandbox inherits
              CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY from the caller;
              when neither is set, the token (from `claude setup-token`) is
              read from $PM_SANDBOX_CLAUDE_TOKEN_FILE (default
-             ~/.config/pm-secrets/claude-token) into the environment of
-             `up`, `run` and `shell` — never into a file. Failing both, log
-             in once (attach, then /login). `trust` each project dir before
-             spawning agents in it. opencode gets nothing copied: set its
-             providers in pm config ([harness.opencode.providers.<id>])
+             ~/.config/pm-secrets/claude-token) into the environment of `up`,
+             `run` and `shell` — never into a file. Failing both, log in once
+             (attach, then /login). `trust` each project dir before spawning
+             agents in it. opencode gets nothing copied: set its providers in
+             pm config ([harness.opencode.providers.<id>])
   --shell S  shell tmux windows run (default: $SHELL, non-login, no rc files
              since HOME is the sandbox)
 
@@ -176,6 +177,14 @@ up() {
     echo "real=1" >> "$home/.sandbox"
     load_claude_token
     [ -f "$HOME/.claude.json" ] && cp "$HOME/.claude.json" "$home/.claude.json"
+    [ -f "$home/.claude.json" ] || echo '{}' > "$home/.claude.json"
+    node -e '
+      const fs = require("fs");
+      const file = process.argv[1];
+      const j = JSON.parse(fs.readFileSync(file, "utf8"));
+      j.autoModeEnvSetup = { ...(j.autoModeEnvSetup || {}), dismissed: true };
+      fs.writeFileSync(file, JSON.stringify(j, null, 2));
+    ' "$home/.claude.json"
     if [ -f "$HOME/.codex/auth.json" ]; then
       mkdir -p "$home/.codex" && cp "$HOME/.codex/auth.json" "$home/.codex/auth.json"
     fi

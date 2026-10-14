@@ -232,24 +232,28 @@ fn names_server(server: Option<&str>, tmux_env: &str) -> bool {
 }
 
 /// The session holding the pane this process runs in, when that pane is on
-/// `server`: a pane id names a pane only on its own server.
+/// `server`.
 pub fn own_session(server: Option<&str>) -> Option<String> {
-    let tmux_env = std::env::var("TMUX").ok();
-    let pane = std::env::var("TMUX_PANE").ok();
-    session_of_pane(server, tmux_env.as_deref()?, pane.as_deref()?)
-}
-
-/// The session of `pane`, if `tmux_env` names `server`.
-fn session_of_pane(server: Option<&str>, tmux_env: &str, pane: &str) -> Option<String> {
-    if !names_server(server, tmux_env) || !pane.starts_with('%') {
-        return None;
-    }
+    let pane = own_pane(server)?;
     run_tmux(
         server,
-        &["display-message", "-p", "-t", pane, "#{session_name}"],
+        &["display-message", "-p", "-t", &pane, "#{session_name}"],
     )
     .ok()
     .filter(|s| !s.is_empty())
+}
+
+/// The pane this process runs in, when that pane is on `server`: a pane id
+/// names a pane only on its own server.
+pub fn own_pane(server: Option<&str>) -> Option<String> {
+    let tmux_env = std::env::var("TMUX").ok()?;
+    let pane = std::env::var("TMUX_PANE").ok()?;
+    pane_on(server, &tmux_env, &pane).then_some(pane)
+}
+
+/// Whether `pane` is a pane id on `server`, as `tmux_env` names it.
+fn pane_on(server: Option<&str>, tmux_env: &str, pane: &str) -> bool {
+    names_server(server, tmux_env) && pane.starts_with('%')
 }
 
 /// Create a new window in an existing tmux session. Returns the new window's target
@@ -909,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pane_has_a_session_only_on_the_server_tmux_env_names() {
+    fn a_pane_is_ours_only_on_the_server_tmux_env_names() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let name = server.scope("own");
@@ -918,10 +922,11 @@ mod tests {
         let socket = socket_path(server.name()).unwrap().unwrap();
 
         let env = format!("{socket},1,0");
-        assert_eq!(session_of_pane(server.name(), &env, &pane), Some(name));
+        assert!(pane_on(server.name(), &env, &pane));
+        assert!(!pane_on(server.name(), &env, &format!("{name}:0")));
         let other = std::path::Path::new(&socket).with_file_name("pm-elsewhere");
         let env = format!("{},1,0", other.display());
-        assert_eq!(session_of_pane(server.name(), &env, &pane), None);
+        assert!(!pane_on(server.name(), &env, &pane));
     }
 
     #[test]

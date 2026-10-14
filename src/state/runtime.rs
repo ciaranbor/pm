@@ -113,6 +113,7 @@ const TRIPPED_FILE: &str = "loop-tripped";
 const STOP_LOG: &str = "stop-hook.log";
 const LAUNCH_STAMP_FILE: &str = "launch-stamp";
 const RESTART_AT_IDLE_FILE: &str = "restart-at-idle";
+const WOKEN_THROUGH_FILE: &str = "woken-through";
 /// The size past which the Stop hook's log keeps only its newer half.
 const STOP_LOG_MAX: u64 = 64 * 1024;
 
@@ -347,6 +348,42 @@ pub fn clear_waiting_if(
     } else {
         Ok(false)
     }
+}
+
+/// Replace the agent's marker with `new` if it is still `expected`, leaving
+/// any other a hook wrote since. Returns whether it replaced it.
+pub fn replace_waiting_if(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    expected: &Waiting,
+    new: &Waiting,
+) -> Result<bool> {
+    if read_waiting(project_root, scope, agent).as_ref() != Some(expected) {
+        return Ok(false);
+    }
+    write_waiting(project_root, scope, agent, new)?;
+    Ok(true)
+}
+
+/// Record `detail`, what the dialog the waiter woke the agent through
+/// says, for the next waiter: the woken turn's prompt clears the marker.
+pub fn write_woken_through(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    detail: &str,
+) -> Result<()> {
+    let file = agent_dir(project_root, scope, agent)?.join(WOKEN_THROUGH_FILE);
+    write_atomic(&file, detail.as_bytes())
+}
+
+/// Take what [`write_woken_through`] recorded, if anything, removing it.
+pub fn take_woken_through(project_root: &Path, scope: &str, agent: &str) -> Option<String> {
+    let file = agent_file(project_root, scope, agent, WOKEN_THROUGH_FILE);
+    let detail = std::fs::read_to_string(&file).ok();
+    let _ = std::fs::remove_file(&file);
+    detail
 }
 
 /// What the waiter's breaker knew at its last wake.

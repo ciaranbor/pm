@@ -11,9 +11,9 @@
 //! background, while background work runs, which the waiter file records
 //! too: a prompt clears the marker, and an interrupt can leave this waiter
 //! the agent's only one; or asking, while a subagent's dialog is still
-//! open), then waits on the inbox. With
-//! messages unread it hands the continuation to the harness: at once when
-//! some are unread as it starts. The harness never ends an earlier waiter
+//! open, or one its screen shows, [`super::screen`]), then waits on the
+//! inbox. With messages unread it hands the continuation to the harness:
+//! at once when some are unread as it starts. The harness never ends an earlier waiter
 //! as a later turn starts, so one can outlive several turns and fire
 //! mid-turn; each new one supersedes it, and a superseded waiter, or one
 //! whose harness is gone, ends without a word or a marker. Whatever is
@@ -31,7 +31,7 @@
 //! unread.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::commands::agent_wait;
 use crate::commands::attention::AgentState;
@@ -44,7 +44,9 @@ use crate::harness::{Harness, Wake};
 use crate::messages;
 use crate::state::paths;
 use crate::state::runtime::{self, Breaker, Waiting, WaitingKind};
+use crate::tmux;
 
+use super::screen::Watch;
 use super::{background_work, hook_ended, parse_busy, read_stdin, sweep};
 
 /// Wasted wakes in a row that stop the loop.
@@ -114,7 +116,12 @@ pub(super) fn run_on(
         scope: &scope,
         name: &agent,
     };
-    let waited = wait(at, busy, sweeper, on_turn, |interval| {
+    let pane = tmux::own_pane(sweeper.tmux_server);
+    let capture = || {
+        let pane = pane.as_deref()?;
+        tmux::capture_screen(sweeper.tmux_server, pane).ok()
+    };
+    let waited = wait(at, busy, sweeper, on_turn, capture, |interval| {
         std::thread::sleep(interval);
         !caller.alive()
     });
@@ -264,14 +271,15 @@ fn wait_in_turn(
 /// How often a turn waiter checks the inbox, as [`agent_wait`] does.
 const POLL: Duration = Duration::from_secs(2);
 
-/// Wait for `agent`'s inbox as its newest waiter. `gone` sleeps up to the
-/// poll interval and returns whether the harness that ran the waiter is
-/// gone.
+/// Wait for `agent`'s inbox as its newest waiter, watching its screen
+/// ([`Watch`]), which `capture` returns. `gone` sleeps up to the poll
+/// interval and returns whether the harness that ran the waiter is gone.
 fn wait(
     at: AgentAt<'_>,
     busy: bool,
     sweeper: Sweeper<'_>,
     on_turn: &mut dyn FnMut(AgentState, u32),
+    capture: impl FnMut() -> Option<String>,
     mut gone: impl FnMut(Duration) -> bool,
 ) -> Result<Waited> {
     let AgentAt {
@@ -286,6 +294,7 @@ fn wait(
     let started = chrono::Utc::now();
     hooks_dialog::close_with_turn(project_root, scope, agent)?;
     runtime::take_waiter(project_root, scope, agent, waiter, busy.then_some(started))?;
+    let woken_through = runtime::take_woken_through(project_root, scope, agent);
     if runtime::loop_tripped(project_root, scope, agent).is_some() {
         log("the loop is stopped: ends at once");
         return Ok(Waited::Ended);
@@ -302,19 +311,35 @@ fn wait(
     } else {
         WaitingKind::Idle
     };
+    let mut marked = None;
     if !immediate {
         let waiting = hooks_waiting::between_turns(project_root, scope, agent, harness, started);
         log(&format!("nothing unread: waits, marked {:?}", waiting.kind));
         runtime::write_waiting(project_root, scope, agent, &waiting)?;
         on_turn(hooks_waiting::state_of(&waiting), 0);
+        let until = harness
+            .unhooked_dialog_window()
+            .map(|window| Instant::now() + window);
+        let mut watch = Watch::new(at, woken_through, started, until, capture);
+        let mut watch_screen = |on_turn: &mut dyn FnMut(AgentState, u32)| match watch.check() {
+            Ok(Some(state)) => {
+                log(&format!("its screen says it is {state:?}"));
+                on_turn(state, 0);
+            }
+            Ok(None) => {}
+            Err(e) => log(&format!("could not mark what its screen shows: {e}")),
+        };
+        watch_screen(on_turn);
         let mut ended = false;
         agent_wait::agent_wait_while(project_root, scope, agent, None, None, |d| {
             ended = gone(d) || !newest();
             if !ended {
                 sweep(project_root, scope, agent, sweeper);
+                watch_screen(on_turn);
             }
             !ended
         })?;
+        marked = watch.marked().cloned();
         if ended || !newest() {
             log(if newest() {
                 "its harness is gone: ends"
@@ -337,11 +362,19 @@ fn wait(
         "a message arrived: wakes the agent"
     });
     // The turn the wake starts ends what the waiter marked: its own marker,
-    // or a dialog's it kept, which then stands for an agent mid-turn.
+    // or a dialog's it kept, which then stands for an agent mid-turn. A
+    // dialog's detail its screen doesn't show is kept for the next waiter.
     if !runtime::clear_waiting_if(project_root, scope, agent, marker)?
         && let Some(held) =
             runtime::read_waiting(project_root, scope, agent).filter(|w| w.between_turns)
     {
+        if held.kind == WaitingKind::Dialog
+            && held.subagent.is_none()
+            && marked.as_ref() != Some(&held)
+            && let Some(detail) = &held.detail
+        {
+            runtime::write_woken_through(project_root, scope, agent, detail)?;
+        }
         let held = Waiting {
             between_turns: false,
             ..held
@@ -438,6 +471,10 @@ mod tests {
         assert_eq!(waited, Waited::Ended);
     }
 
+    fn claude_screen(name: &str) -> String {
+        crate::testing::screen_fixture(&format!("claude-code-{name}"))
+    }
+
     fn at(root: &Path) -> AgentAt<'_> {
         AgentAt {
             harness: Harness::ClaudeCode,
@@ -494,9 +531,14 @@ mod tests {
             .unwrap();
         super::super::tests::due_send(&root, "implementer");
 
-        let waited = wait(at(&root), false, sweeper(&server), &mut |_, _| {}, |_| {
-            panic!("waited on a due send")
-        })
+        let waited = wait(
+            at(&root),
+            false,
+            sweeper(&server),
+            &mut |_, _| {},
+            || None,
+            |_| panic!("waited on a due send"),
+        )
         .unwrap();
 
         assert_eq!(
@@ -507,6 +549,113 @@ mod tests {
         );
         let breaker = runtime::read_breaker(&root, "login", "implementer").unwrap();
         assert_eq!(breaker.wasted, 0);
+    }
+
+    #[test]
+    fn a_waiter_marks_the_agent_asking_while_its_screen_shows_a_dialog() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let closed = std::cell::Cell::new(false);
+        let mut polls = 0;
+        let mut turns = Vec::new();
+
+        let waited = wait(
+            at(root),
+            false,
+            NO_SWEEP,
+            &mut |state, _| turns.push(state),
+            || {
+                Some(claude_screen(if closed.get() {
+                    "draft"
+                } else {
+                    "teach-below"
+                }))
+            },
+            |_| {
+                polls += 1;
+                closed.set(polls >= 2);
+                polls == 4
+            },
+        )
+        .unwrap();
+
+        assert_eq!(waited, Waited::Ended);
+        assert_eq!(
+            turns,
+            [AgentState::Idle, AgentState::Asking, AgentState::Idle]
+        );
+    }
+
+    /// Runs a waiter that a message wakes once `open` has marked a dialog
+    /// between turns; then the next waiter, its agent's screen showing
+    /// `screen`. Returns the next waiter's marker.
+    fn wake_through(root: &Path, open: impl Fn(), screen: &str) -> Waiting {
+        let messages = paths::messages_dir(root);
+        let mut polls = 0;
+        let waited = wait(
+            at(root),
+            false,
+            NO_SWEEP,
+            &mut |_, _| {},
+            || Some(claude_screen(screen)),
+            |_| {
+                polls += 1;
+                if polls == 1 {
+                    open();
+                    messages::send(&messages, "login", "implementer", "qa", "hi").unwrap();
+                }
+                false
+            },
+        )
+        .unwrap();
+        assert!(matches!(waited, Waited::Wake(_)));
+        messages::next(&messages, "login", "implementer", "qa@login").unwrap();
+        runtime::clear_waiting(root, "login", "implementer").unwrap();
+
+        let proposal = claude_screen("proposal");
+        wait(
+            at(root),
+            false,
+            NO_SWEEP,
+            &mut |_, _| {},
+            || Some(proposal.clone()),
+            |_| true,
+        )
+        .unwrap();
+        runtime::read_waiting(root, "login", "implementer").unwrap()
+    }
+
+    #[test]
+    fn a_proposal_a_wake_ran_a_turn_through_still_asks_after_it() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let notified = Waiting {
+            between_turns: true,
+            ..Waiting::now(
+                WaitingKind::Dialog,
+                Some("Auto-mode setup proposal is ready for review".into()),
+            )
+        };
+        let open = || runtime::write_waiting(root, "login", "implementer", &notified).unwrap();
+
+        let marker = wake_through(root, open, "proposal");
+
+        assert_eq!(marker.kind, WaitingKind::Dialog);
+        assert_eq!(
+            marker.describe(),
+            "Auto-mode setup proposal is ready for review"
+        );
+    }
+
+    #[test]
+    fn a_title_read_off_the_screen_is_not_carried_to_another_dialog() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+
+        let marker = wake_through(root, || {}, "teach-below");
+
+        assert_eq!(marker.kind, WaitingKind::Dialog);
+        assert_eq!(marker.detail, None);
     }
 
     #[test]
@@ -535,6 +684,7 @@ mod tests {
             false,
             NO_SWEEP,
             &mut |state, _| turns.push(state),
+            || None,
             |_| true,
         )
         .unwrap();

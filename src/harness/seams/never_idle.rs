@@ -191,6 +191,32 @@ impl Harness {
         }
     }
 
+    /// How long after a turn ends a dialog that no hook reports can take to
+    /// be drawn, for a harness that draws such dialogs between turns, or
+    /// dialogs no hook reports closing, which only its screen shows
+    /// ([`screen_dialog`](Self::screen_dialog)); `None` for one that draws
+    /// none.
+    pub fn unhooked_dialog_window(self) -> Option<std::time::Duration> {
+        match self {
+            Harness::ClaudeCode => Some(claude_code::screen::OPENS_WITHIN),
+            Harness::Codex | Harness::OpenCode => None,
+        }
+    }
+
+    /// The marker, between turns, for the dialog this harness's `screen`,
+    /// captured with its escape sequences, shows beside its input line;
+    /// `None` when it shows none.
+    pub fn screen_dialog(self, screen: &str) -> Option<Waiting> {
+        let shown = match self {
+            Harness::ClaudeCode => claude_code::screen::dialog(screen)?,
+            Harness::Codex | Harness::OpenCode => return None,
+        };
+        Some(Waiting {
+            between_turns: true,
+            ..Waiting::now(WaitingKind::Dialog, shown.title)
+        })
+    }
+
     /// Why this agent's never-idle loop stopped itself, if it did: pm's
     /// waiter records it, opencode's plugin in a file of its own.
     pub fn loop_stopped(self, project_root: &Path, scope: &str, agent: &str) -> Option<String> {

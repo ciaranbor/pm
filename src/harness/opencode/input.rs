@@ -142,11 +142,7 @@ mod tests {
     use super::*;
 
     fn screen(name: &str) -> String {
-        let path = format!(
-            "{}/tests/fixtures/screens/opencode-{name}.txt",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        std::fs::read_to_string(path).unwrap()
+        crate::testing::screen_fixture(&format!("opencode-{name}"))
     }
 
     #[test]
