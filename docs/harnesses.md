@@ -111,24 +111,29 @@ Set `[agents.harness] <def> = "codex"` and pm spawns that agent in the codex
 TUI. The loop, messaging, and skills are the same; what codex needs to run
 unattended:
 
-- **Hook trust — one interactive step per machine.** pm installs its hooks
-  into `$CODEX_HOME/hooks.json` (creating `$CODEX_HOME` if needed), but
-  codex runs no hook it has not been told to trust, and fails **silently**
-  without it (the agent idles after its first turn). Start `codex` once in a
-  trusted directory and choose **"Trust all and continue"** at the "Hooks
-  need review" prompt. Codex asks again when a hook's command changes, so
-  accept it again after an upgrade that changed one, or that added one (the
-  status hooks did); until then the agent's startup reads `asking`. Without
-  trust for the status hooks alone an agent still runs, but a dialog
-  waiting on you reads as busy. The hooks file is
-  global: the prompt appears in whichever codex session comes first,
-  including your own non-pm ones. `pm doctor` asks codex which of pm's
-  hooks it trusts, so it also reports a trust an upgrade has outdated; the
-  escape hatch is `[harness.codex] bypass_hook_trust = true`
-  (`--dangerously-bypass-hook-trust`, one warning line per launch). It
-  does not cover a restart: codex reviews untrusted hooks on every resume
-  of an agent's session whatever the flag says, so a restarted agent waits
-  at that review until you answer it. Trusting the hooks avoids it.
+- **Hook trust — one consent per machine.** pm installs its hooks into
+  `$CODEX_HOME/hooks.json` (creating `$CODEX_HOME` if needed), but codex
+  runs no hook it has not been told to trust, and fails **silently**
+  without it (the agent idles after its first turn); a restarted agent
+  stops at codex's "Hooks need review" screen instead. Codex asks again
+  whenever an upgrade changes or adds one of pm's hooks. `pm onboard` asks
+  once whether pm may record that trust itself, and saves the answer as
+  `[harness.codex] trust_pm_hooks` in the global config (global only: the
+  hooks file is the machine's). With it on, every hook install (`pm init`,
+  `pm update`, `pm harness hooks install`, `pm doctor --fix`) has codex
+  trust pm's hooks as they now stand, through codex's own config writer,
+  before `pm update` restarts anything. That grants trust codex designed
+  as an interactive step, so pm does it only with this consent and only
+  for the hooks at pm's own positions in the file: your own hooks stay
+  yours to review. To consent later, run `pm config set --global
+  harness.codex.trust_pm_hooks true`, then `pm harness hooks install`.
+  Without it, start `codex` once in a trusted directory and choose
+  **"Trust all and continue"**, again after each upgrade that changes a
+  hook; the prompt appears in whichever codex session comes first,
+  including your own non-pm ones. Without trust for the status hooks alone
+  an agent still runs, but a dialog waiting on you reads as busy. `pm
+  doctor` asks codex which of pm's hooks it trusts, so it also reports a
+  trust an upgrade has outdated.
 - **Directory trust** pm writes itself: each worktree gets a
   `trust_level = "trusted"` entry in `$CODEX_HOME/config.toml` at spawn
   (`pm doctor --fix` adds any missing).
@@ -147,6 +152,7 @@ unattended:
   sandbox = "workspace-write"   # default for codex agents with no permissions row
   approval = "never"            # "on-request" would stall an unwatched window
   writable_roots = ["main/target"]   # extra writable roots; a project [] masks global
+  trust_pm_hooks = true         # global only: see hook trust above
   ```
 
   pm always makes its state dir, the shared `main/.git`, and the pm config

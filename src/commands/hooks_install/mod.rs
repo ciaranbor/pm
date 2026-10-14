@@ -10,9 +10,12 @@
 //! if absent: which harnesses are in use is a per-project answer and the
 //! install also runs outside any project, so a harness named only in some
 //! project's `.pm/config.toml` would otherwise be skipped and its agents
-//! would idle silently. The accepted cost is codex's one-time trust prompt
-//! in whichever codex session comes first, pm-spawned or not. `pm doctor`
-//! checks only the harnesses the project's agents run on.
+//! would idle silently. Without the user's consent to pm trusting its
+//! hooks, the accepted cost is codex's trust prompt in whichever codex
+//! session comes first, pm-spawned or not. With it, a real install has
+//! each harness trust pm's hooks as written ([`Harness::trust_pm_hooks`]),
+//! before `pm update` restarts any agent. `pm doctor` checks
+//! only the harnesses the project's agents run on.
 //!
 //! Entries written by older releases are rewritten in place in the user
 //! file (see `entries` for how they are recognised).
@@ -35,9 +38,9 @@ pub use entries::{
     session_start_hook_command, stop_hook_command, user_prompt_hook_command, waiting_events,
     waiting_hook_command,
 };
-pub(crate) use install::install_in;
-pub use install::{install, install_dry_run};
-pub use settings::{pm_hook_position, user_hooks_root};
+pub use install::{install, install_dry_run, trust_in};
+pub(crate) use install::{install_in, install_quietly};
+pub use settings::{pm_hook_position, pm_hook_positions, user_hooks_root};
 
 #[cfg(doc)]
 use crate::harness::Harness;
@@ -82,6 +85,18 @@ pub(crate) mod test_support {
     pub(crate) fn write_json(path: &Path, value: &Value) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, serde_json::to_string_pretty(value).unwrap()).unwrap();
+    }
+
+    /// Record codex's trust in pm's hooks as installed under `home`, the
+    /// entries codex itself would write.
+    pub(crate) fn trust_codex_hooks(home: &Path) {
+        let root = super::user_hooks_root(Harness::Codex, home)
+            .unwrap()
+            .unwrap();
+        crate::harness::testing::record_codex_hook_trust(
+            home,
+            &super::pm_hook_positions(Harness::Codex, &root),
+        );
     }
 
     pub(crate) fn command_at(root: &Value, pointer: &str) -> String {

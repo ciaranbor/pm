@@ -1,5 +1,5 @@
 //! `pm onboard`: the terminal side of [`commands::onboard`] — the harness
-//! report, the one question, and leaving the user in home's session.
+//! report, its questions, and leaving the user in home's session.
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -27,6 +27,7 @@ pub(super) fn run(harness: Option<Harness>, server: Option<&str>) -> Result<()> 
                     onboard::SUPERVISOR
                 );
             }
+            offer_hook_trust(&dirs.config)?;
             println!("Opening home at {}", display(&root));
             root
         }
@@ -72,6 +73,7 @@ fn create(
 ) -> Result<()> {
     let store = GlobalStore::resolve()?;
     onboard::install(&store)?;
+    offer_hook_trust(config_dir)?;
 
     let global = GlobalConfig::load(config_dir)?;
     let statuses = onboard::readiness(&global, root, &store.home)?;
@@ -106,6 +108,30 @@ fn create(
     }
     onboard::create(root, projects_dir, &store, server)?;
     println!("Created home at {}", display(root));
+    Ok(())
+}
+
+/// Ask, at a terminal, to let pm trust its own hooks in each harness that
+/// has not trusted them and whose consent the user has not answered.
+fn offer_hook_trust(config_dir: &Path) -> Result<()> {
+    if !std::io::stdin().is_terminal() {
+        return Ok(());
+    }
+    let home = paths::home_dir()?;
+    let global = GlobalConfig::load(config_dir)?;
+    for harness in onboard::hook_trust_offers(&global, &home)? {
+        eprint!("Let pm trust its own hooks in {harness}, now and after each pm update? [y/N] ");
+        std::io::stderr().flush()?;
+        let mut answer = String::new();
+        if std::io::stdin().lock().read_line(&mut answer)? == 0 {
+            return Ok(());
+        }
+        let consent = matches!(answer.trim(), "y" | "Y" | "yes");
+        match onboard::answer_hook_trust(config_dir, harness, consent, &home) {
+            Ok(lines) => lines.iter().for_each(|line| println!("{line}")),
+            Err(e) => eprintln!("warning: {e}"),
+        }
+    }
     Ok(())
 }
 

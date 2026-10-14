@@ -20,11 +20,10 @@
 //! a resumed one's, once the TUI has loaded it. The TUI makes a fork
 //! itself (`fork <id>`): a thread the API forked stays loaded, so its
 //! being loaded would not say the TUI has opened it, and a TUI resuming a
-//! loaded thread drops the config it asks for, `--dangerously-bypass-hook-trust`
-//! among them.
+//! loaded thread drops the config it asks for.
 //!
-//! On a remote resume the TUI reviews untrusted hooks whatever that flag
-//! says (codex 0.160: it may be attaching to a thread already running), so
+//! On a remote resume the TUI reviews untrusted hooks whatever its flags
+//! say (codex 0.160: it may be attaching to a thread already running), so
 //! an agent whose hooks codex does not trust stops at that review on every
 //! restart.
 
@@ -65,7 +64,6 @@ pub struct CodexHost {
     /// Directories outside the worktree the agent must be able to write.
     pub writable: Vec<PathBuf>,
     pub model: Option<String>,
-    pub bypass_hook_trust: bool,
     /// The session to resume, or with `fork`, to fork.
     pub resume: Option<String>,
     pub fork: bool,
@@ -135,9 +133,6 @@ impl CodexHost {
         ];
         if let Some(model) = &self.model {
             args.extend(["-m".to_string(), model.clone()]);
-        }
-        if self.bypass_hook_trust {
-            args.push("--dangerously-bypass-hook-trust".to_string());
         }
         if let Some(session) = &self.resume {
             args.extend([
@@ -326,7 +321,6 @@ mod tests {
         let worktree = Path::new("/private/proj/main");
         let host = CodexHost {
             model: Some("gpt-5".into()),
-            bypass_hook_trust: true,
             ..host("workspace-write")
         };
         let fresh = host.tui_args(socket, worktree);
@@ -339,7 +333,6 @@ mod tests {
                 "/private/proj/main",
                 "-m",
                 "gpt-5",
-                "--dangerously-bypass-hook-trust",
             ]
         );
         let resumed = CodexHost {

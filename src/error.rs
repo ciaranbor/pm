@@ -227,6 +227,10 @@ pub enum PmError {
     #[error("update: {0}")]
     Update(String),
 
+    /// A harness's trust in pm's hooks could not be recorded.
+    #[error("{0}")]
+    HookTrust(String),
+
     #[error("Transcript unreadable: {0}")]
     Transcript(String),
 }

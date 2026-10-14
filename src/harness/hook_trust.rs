@@ -26,29 +26,51 @@ impl HookTrust {
 }
 
 #[cfg(test)]
+pub(crate) mod testing {
+    use std::path::Path;
+
+    use super::codex;
+
+    /// Record codex's trust in the hooks at `positions` (event, entry,
+    /// inner hook) of its hooks file under `home`, as codex writes it.
+    pub(crate) fn record_codex_hook_trust(home: &Path, positions: &[(&str, usize, usize)]) {
+        let codex_home = codex::home_dir(home);
+        let hooks_file = codex_home.join(codex::HOOKS_FILE);
+        let config = codex_home.join("config.toml");
+        let mut text = std::fs::read_to_string(&config).unwrap_or_default();
+        for (event, entry, hook) in positions {
+            let key = codex::hook_trust_key(&hooks_file, event, *entry, *hook);
+            text.push_str(&format!(
+                "\n[hooks.state.\"{key}\"]\ntrusted_hash = \"sha256:t\"\n"
+            ));
+        }
+        std::fs::create_dir_all(&codex_home).unwrap();
+        std::fs::write(config, text).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::harness::{Harness, Probe};
-    use crate::state::project::HarnessConfig;
 
     #[test]
     fn trust_seams_are_inert_for_claude_code_and_gate_codex() {
         let home = tempfile::tempdir().unwrap();
         let wt = tempfile::tempdir().unwrap();
-        let config = HarnessConfig::default();
         assert!(Harness::ClaudeCode.worktree_trusted(home.path(), wt.path()));
         assert!(
             !Harness::ClaudeCode
                 .trust_worktree(home.path(), wt.path())
                 .unwrap()
         );
-        let trusted = |harness: Harness, config: &HarnessConfig, event, entry| {
+        let trusted = |harness: Harness, event, entry| {
             harness
-                .hook_trust(config, home.path(), Probe::Cached)
+                .hook_trust(home.path(), Probe::Cached)
                 .status(event, entry, 0)
                 == HookTrustStatus::Trusted
         };
-        assert!(trusted(Harness::ClaudeCode, &config, "Stop", 0));
+        assert!(trusted(Harness::ClaudeCode, "Stop", 0));
 
         assert!(!Harness::Codex.worktree_trusted(home.path(), wt.path()));
         assert!(
@@ -57,7 +79,7 @@ mod tests {
                 .unwrap()
         );
         assert!(Harness::Codex.worktree_trusted(home.path(), wt.path()));
-        assert!(!trusted(Harness::Codex, &config, "Stop", 0));
+        assert!(!trusted(Harness::Codex, "Stop", 0));
         let hooks = home.path().join(".codex/hooks.json");
         std::fs::write(
             home.path().join(".codex/config.toml"),
@@ -67,12 +89,8 @@ mod tests {
             ),
         )
         .unwrap();
-        assert!(trusted(Harness::Codex, &config, "Stop", 1));
-        assert!(!trusted(Harness::Codex, &config, "Stop", 0));
-        assert!(!trusted(Harness::Codex, &config, "SessionStart", 1));
-
-        let mut bypassed = HarnessConfig::default();
-        bypassed.codex.bypass_hook_trust = Some(true);
-        assert!(trusted(Harness::Codex, &bypassed, "SessionStart", 1));
+        assert!(trusted(Harness::Codex, "Stop", 1));
+        assert!(!trusted(Harness::Codex, "Stop", 0));
+        assert!(!trusted(Harness::Codex, "SessionStart", 1));
     }
 }

@@ -48,20 +48,24 @@ fn missing(harness: &str) -> Option<String> {
     }
 }
 
-/// Let `proj`'s codex agents run pm's hooks without codex's interactive
-/// trust gate.
-fn bypass_codex_hook_trust(proj: &Path) {
-    let config = proj.join(".pm/config.toml");
-    let text = std::fs::read_to_string(&config).unwrap();
-    let text = if text.contains("[harness.codex]\n") {
-        text.replace(
-            "[harness.codex]\n",
-            "[harness.codex]\nbypass_hook_trust = true\n",
-        )
-    } else {
-        text + "\n[harness.codex]\nbypass_hook_trust = true\n"
-    };
-    std::fs::write(&config, text).unwrap();
+/// Consent to pm trusting its hooks in codex, and have it trust them in
+/// the sandbox's codex home, as `pm onboard` does on a yes.
+fn trust_codex_hooks(s: &Smoke) {
+    s.pm(s.home())
+        .args([
+            "config",
+            "set",
+            "--global",
+            "harness.codex.trust_pm_hooks",
+            "true",
+        ])
+        .assert()
+        .success();
+    s.pm(s.home())
+        .args(["harness", "hooks", "install"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("pm hooks in codex"));
 }
 
 fn require(harness: &str) {
@@ -587,6 +591,85 @@ fn codex_hook_trust_through_the_interactive_gate_and_a_changed_hook() {
         .success();
 }
 
+/// Catches: pm's own record of codex's trust in its hooks, with the user's
+/// consent, not being the trust codex honours — a spawn or a resume then
+/// stops at "Hooks need review" and no message wakes the agent — and an
+/// install or `pm doctor --fix` not re-trusting a hook codex holds an
+/// outdated hash for. A few turns on codex's default model.
+#[test]
+#[ignore]
+fn codex_hooks_pm_trusted_with_consent_survive_a_restart_and_wake() {
+    use pm::state::runtime::{self, WaitingKind};
+    require("codex");
+    let s = Smoke::real();
+    let proj = s.project_on("proj", "codex", None);
+    let main = proj.join("main");
+    let idle = || {
+        wait_for("the agent to read its messages and idle", TURN, &s, || {
+            pm::messages::unread_count(&proj.join(".pm/messages"), "main", "plain") == 0
+                && runtime::read_waiting(&proj, "main", "plain")
+                    .is_some_and(|w| w.kind == WaitingKind::Idle)
+        });
+    };
+
+    trust_codex_hooks(&s);
+    let doctor = s.doctor(&main);
+    assert!(!doctor.contains("trust"), "{doctor}");
+
+    s.pm(&main)
+        .args(["agent", "spawn", "plain"])
+        .assert()
+        .success();
+    idle();
+    s.pm(&main)
+        .args(["agent", "restart", "--force", "plain"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("resumed session"));
+    idle();
+    s.pm(&main)
+        .args(["msg", "send", "plain", "Reply with the single word pong."])
+        .assert()
+        .success();
+    idle();
+
+    // A hash codex no longer matches, as after a release changed the hook.
+    let config = s.home().join(".codex/config.toml");
+    let outdate = || {
+        let text = std::fs::read_to_string(&config).unwrap();
+        let start = text.find(":stop:").expect("a Stop trust entry");
+        let hash = start + text[start..].find("sha256:").unwrap() + "sha256:".len();
+        let mut text = text;
+        text.replace_range(hash..hash + 4, "0000");
+        std::fs::write(&config, text).unwrap();
+        let doctor = s.doctor(&main);
+        assert!(
+            doctor.contains("codex trusts only an earlier version of pm's Stop hook"),
+            "{doctor}"
+        );
+    };
+    outdate();
+    s.pm(s.home())
+        .args(["harness", "hooks", "install"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("Trusted 1 pm hook in codex"));
+    assert!(!s.doctor(&main).contains("trust"));
+    outdate();
+    let fixed = s.pm(&main).args(["doctor", "--fix"]).output().unwrap();
+    let fixed = String::from_utf8_lossy(&fixed.stdout);
+    assert!(
+        fixed.contains("fixed: codex trusts only an earlier version of pm's Stop hook"),
+        "{fixed}"
+    );
+    assert!(!s.doctor(&main).contains("trust"));
+
+    s.pm(&main)
+        .args(["agent", "stop", "plain"])
+        .assert()
+        .success();
+}
+
 /// Catches: a codex async question (`request_user_input_async`) not read as
 /// asking, or its answer from the phone not reaching codex as the reply its
 /// own question panel gives — so the model never learns it.
@@ -596,7 +679,7 @@ fn codex_async_question_reads_asking_and_is_answered_through_serve() {
     require("codex");
     let s = Smoke::real();
     let proj = s.project_on("proj", "codex", None);
-    bypass_codex_hook_trust(&proj);
+    trust_codex_hooks(&s);
     let main = proj.join("main");
     s.pm(&main)
         .args(["agent", "spawn", "plain"])
@@ -1193,7 +1276,7 @@ fn codex_mode_switches_between_plan_and_default_through_its_server() {
     require("codex");
     let s = Smoke::real();
     let proj = s.project_on("proj", "codex", None);
-    bypass_codex_hook_trust(&proj);
+    trust_codex_hooks(&s);
     let main = proj.join("main");
     s.pm(&main)
         .args(["agent", "spawn", "plain"])

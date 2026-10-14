@@ -160,7 +160,7 @@ pub(super) fn scaffold_state(path: &Path, name: &str, global: &GlobalStore) -> R
     super::docs::bootstrap(path)?;
     super::state_cmd::init(path)?;
     // See `commands::hooks_install` for why every harness gets them.
-    hooks_install::install_in(&global.home, false)?;
+    hooks_install::install_quietly(&global.home)?;
     skills::install_global_in(global)?;
     skills::write_migration_marker(path)?;
     super::vanilla_rename::write_marker(path)?;

@@ -36,7 +36,11 @@ Configuration section (https://github.com/ciaranbor/pm#configuration) and
 1. Per role: harness, then model, then permission mode. Set a model in the
    same file as its harness row, since a model row applies only to the
    harness configured beside or below it (README "Models and permissions").
-2. codex's one-time hook-trust step, if codex is used: `pm doctor` reports it.
+2. If codex is used and `pm config get --global
+   harness.codex.trust_pm_hooks` is unset, ask the user whether pm may
+   trust its own hooks in codex, now and after each pm update. On yes:
+   `pm config set --global harness.codex.trust_pm_hooks true`, then `pm
+   harness hooks install`; `pm doctor` confirms.
 3. `run-shell 'pm tmux init'` in the user's tmux config.
 4. Phone access: `pm serve install --pair <device>`.
 5. Bring their projects under pm (Project setup above).

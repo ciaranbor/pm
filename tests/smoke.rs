@@ -1059,7 +1059,7 @@ fn feat_new_refuses_a_mixed_team_whose_harness_binaries_cannot_run() {
         .success();
     let main = proj.join("main");
     s.set_agents_config("harness", "reviewer = \"codex\"");
-    s.append_config("[harness.codex]\nbypass_hook_trust = true\n");
+    s.trust_codex_hooks();
 
     let shims: Vec<(PathBuf, Vec<u8>)> = ["claude", "codex"]
         .iter()

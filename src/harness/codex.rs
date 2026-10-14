@@ -35,9 +35,10 @@
 //! Two trust gates in `$CODEX_HOME/config.toml` stand between a spawn and a
 //! working agent: `[projects."<dir>"] trust_level = "trusted"`, which pm writes
 //! per worktree before launching, and `[hooks.state."<hooks.json>:<event>:<i>:<j>"]
-//! trusted_hash`, which only codex can write (one interactive "Trust all and
-//! continue" per machine, re-asked when a hook changes — [`hook_trust`]).
-//! Absent hook trust, hooks silently do not run.
+//! trusted_hash`, a hash only codex computes, re-asked for when a hook
+//! changes. The user grants it at codex's "Trust all and continue", or
+//! consents once to pm having codex record it at every hook install
+//! ([`hook_trust`]). Absent hook trust, hooks silently do not run.
 //!
 //! pm's tmux socket is unreachable from inside any codex sandbox (macOS
 //! Seatbelt blocks `AF_UNIX` connect), so the default sandbox is
@@ -162,8 +163,29 @@ pub(super) fn post(inbound: &Inbound, text: &str) -> Result<()> {
 /// Interrupt hook, which may post, 3 s after it starts.
 const POST_WITHIN: std::time::Duration = std::time::Duration::from_millis(1500);
 
-pub(super) const HOOK_TRUST_REMEDY: &str = "start `codex` once in a trusted directory and \
-    choose \"Trust all and continue\" (or set `[harness.codex] bypass_hook_trust = true`)";
+pub(super) const TRUST_CONSENT_KEY: &str = "harness.codex.trust_pm_hooks";
+
+pub(super) const RETIRED_CONFIG_KEYS: &[(&str, &str)] = &[(
+    "harness.codex.bypass_hook_trust",
+    "to have pm trust its own hooks in codex instead, run `pm config set --global \
+     harness.codex.trust_pm_hooks true`, then `pm harness hooks install`",
+)];
+
+/// How a user grants codex's trust in pm's hooks without pm.
+pub(super) const MANUAL_TRUST: &str = "or start `codex` once in a trusted directory and choose \
+    \"Trust all and continue\"";
+
+/// How a user has pm trust its hooks, by whether they consented to it.
+pub(super) fn hook_trust_remedy(consented: bool) -> String {
+    if consented {
+        format!("run `pm harness hooks install` ({MANUAL_TRUST})")
+    } else {
+        format!(
+            "run `pm config set --global {TRUST_CONSENT_KEY} true`, then `pm harness hooks \
+             install` ({MANUAL_TRUST})"
+        )
+    }
+}
 
 /// `$CODEX_HOME`, else `<home>/.codex`. Tests always get the latter so a
 /// developer's own `CODEX_HOME` never leaks into a test home.
@@ -225,9 +247,6 @@ pub(super) fn build_cmd(spec: &SpawnSpec<'_>, cfg: &CodexConfig) -> String {
     if let Some(id) = model {
         parts.push("--model".to_string());
         parts.push(tmux::shell_quote(id));
-    }
-    if cfg.bypass_hook_trust == Some(true) {
-        parts.push("--bypass-hook-trust".to_string());
     }
     if let Some(session_id) = resume_session {
         parts.push(if fork_session { "--fork" } else { "--resume" }.to_string());
@@ -497,7 +516,6 @@ mod tests {
         let config = CodexConfig {
             sandbox: Some("read-only".into()),
             approval: Some("on-request".into()),
-            bypass_hook_trust: Some(true),
             ..Default::default()
         };
         let cmd = build_cmd(
@@ -515,7 +533,7 @@ mod tests {
             cmd,
             "pm harness codex-host --approval 'on-request' --sandbox 'workspace-write' \
              --writable '/proj/.pm' --writable '/proj/main/.git' --model 'gpt-5' \
-             --bypass-hook-trust --fork 'abc'"
+             --fork 'abc'"
         );
     }
 

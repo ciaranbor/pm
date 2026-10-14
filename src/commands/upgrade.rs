@@ -16,17 +16,14 @@ use super::serve_install::{self, Refresh};
 use super::skills;
 use super::upgrade_restart;
 
-/// Upgrade a single project: reinstall hooks, bootstrap state, migrate any
+/// Upgrade a single project: bootstrap state, migrate any
 /// pre-global-tier bundled copies away, and project the project's own
 /// customs for each harness in use. Feature worktrees are untouched except by
 /// that migration, which removes only pm-owned files.
-/// The global asset tier is installed separately (see [`upgrade`]) since it
-/// is shared by every project.
+/// The global asset tier and the hooks are installed separately (see
+/// [`upgrade`]) since they are shared by every project.
 pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
     let mut updated: Vec<String> = Vec::new();
-
-    let _ = hooks_install::install()?;
-    updated.push("hooks".to_string());
 
     // Bootstrap information store and state repo (both idempotent)
     super::docs::bootstrap(project_root)?;
@@ -307,10 +304,11 @@ fn upgrade_projects_dry_run(projects_dir: &Path) -> Result<(Vec<String>, bool)> 
     Ok((lines, hooks_change))
 }
 
-/// Install (or preview installing) the shared global asset tier, and
-/// refresh the `pm serve` LaunchAgent if one is installed. A failure here —
-/// no resolvable home, say — is reported as a line rather than aborting the
-/// per-project work that follows.
+/// Install (or preview installing) the shared global asset tier, install
+/// pm's hooks (trusting them where the user consented; a dry run previews
+/// hooks per project), and refresh the `pm serve` LaunchAgent if one is
+/// installed. A failure here — no resolvable home, say — is reported as a
+/// line rather than aborting the per-project work that follows.
 fn install_global_lines(dry_run: bool) -> Vec<String> {
     let result = if dry_run {
         skills::install_global_dry_run()
@@ -321,6 +319,12 @@ fn install_global_lines(dry_run: bool) -> Vec<String> {
         Ok(lines) => lines,
         Err(e) => vec![format!("global assets: error: {e}")],
     };
+    if !dry_run {
+        match paths::home_dir().and_then(|home| hooks_install::install_in(&home, false)) {
+            Ok(installed) => lines.extend(installed),
+            Err(e) => lines.push(format!("hooks: error: {e}")),
+        }
+    }
     let refreshed = paths::home_dir().and_then(|home| {
         serve_install::refresh(
             &home,
@@ -468,10 +472,8 @@ last_active = "2026-01-01T00:00:00Z"
         skills::install_global().unwrap();
 
         let summary = upgrade_project(&root).unwrap().join("\n");
-        assert!(summary.contains("hooks"), "{summary}");
         assert!(summary.contains("docs"), "{summary}");
         assert!(summary.contains("for main"), "{summary}");
-        assert!(hooks_install::is_installed_for(Harness::ClaudeCode).unwrap());
         assert!(skills::is_migrated(&root));
 
         // Bundled assets go to the global tier, never into the project.
@@ -568,8 +570,6 @@ last_active = "2026-01-01T00:00:00Z"
             feature_toml
         );
         assert_eq!(fs::read_to_string(&msg).unwrap(), "hello");
-
-        assert!(hooks_install::is_installed_for(Harness::ClaudeCode).unwrap());
 
         // `solo` now resolves from the global tier, and a second run is a no-op.
         assert!(crate::state::workflow::exists(&root, "solo"));
@@ -709,6 +709,8 @@ last_active = "2026-01-01T00:00:00Z"
     fn dry_run_returns_empty_when_up_to_date_and_reports_drifted_projections() {
         let dir = tempdir().unwrap();
         let root = setup_project(dir.path());
+        // What `pm update` installs before the per-project pass.
+        hooks_install::install_in(&paths::home_dir().unwrap(), false).unwrap();
         upgrade_project(&root).unwrap();
         assert!(upgrade_project_dry_run(&root).unwrap().0.is_empty());
 

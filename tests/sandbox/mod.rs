@@ -393,6 +393,38 @@ impl Smoke {
         std::fs::write(&config, text.replace(&header, &format!("{header}{row}\n"))).unwrap();
     }
 
+    /// Record codex's trust in every hook of the sandbox's codex hooks file,
+    /// as its "Trust all and continue" would: a shim codex answers no
+    /// `hooks/list`, so pm reads an entry's presence as trust.
+    pub fn trust_codex_hooks(&self) {
+        let codex = self.home().join(".codex");
+        let hooks_file = codex.join("hooks.json");
+        let root: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&hooks_file).unwrap()).unwrap();
+        let mut trust = String::new();
+        for (event, entries) in root["hooks"].as_object().unwrap() {
+            let snake: String = event
+                .chars()
+                .enumerate()
+                .flat_map(|(i, c)| {
+                    let sep = (i > 0 && c.is_ascii_uppercase()).then_some('_');
+                    sep.into_iter().chain([c.to_ascii_lowercase()])
+                })
+                .collect();
+            for (i, entry) in entries.as_array().unwrap().iter().enumerate() {
+                for j in 0..entry["hooks"].as_array().map_or(0, Vec::len) {
+                    trust.push_str(&format!(
+                        "\n[hooks.state.\"{}:{snake}:{i}:{j}\"]\ntrusted_hash = \"sha256:t\"\n",
+                        hooks_file.display()
+                    ));
+                }
+            }
+        }
+        let config = codex.join("config.toml");
+        let text = std::fs::read_to_string(&config).unwrap_or_default();
+        std::fs::write(&config, text + &trust).unwrap();
+    }
+
     /// Append `toml` to the project's config.
     pub fn append_config(&self, toml: &str) {
         let config = self.proj().join(".pm/config.toml");

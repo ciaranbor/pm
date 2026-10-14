@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use crate::error::{PmError, Result};
 use crate::state::paths;
-use crate::state::project::{GlobalConfig, ProjectConfig, Shape, shape_of};
+use crate::state::project::{CodexConfig, GlobalConfig, ProjectConfig, Shape, shape_of};
 
 pub use get::{Setting, get};
 pub use list::list;
@@ -60,8 +60,28 @@ impl Files {
 
 fn shape(tier: Tier) -> Shape {
     match tier {
-        Tier::Project => shape_of::<ProjectConfig>(),
+        Tier::Project => {
+            let mut shape = shape_of::<ProjectConfig>();
+            drop_fields(&mut shape, &["harness", "codex"], CodexConfig::GLOBAL_ONLY);
+            shape
+        }
         Tier::Global => shape_of::<GlobalConfig>(),
+    }
+}
+
+/// Remove `names` from the table at `path`: keys the struct shares with
+/// the global file but only the global one is read for.
+fn drop_fields(shape: &mut Shape, path: &[&str], names: &[&str]) {
+    let Shape::Table(fields) = shape else {
+        return;
+    };
+    match path.split_first() {
+        None => fields.retain(|(name, _)| !names.contains(name)),
+        Some((first, rest)) => {
+            if let Some((_, inner)) = fields.iter_mut().find(|(name, _)| name == first) {
+                drop_fields(inner, rest, names);
+            }
+        }
     }
 }
 

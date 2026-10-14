@@ -2,10 +2,10 @@
 //! entry under an event, and locating one.
 //!
 //! Only pm's inner hook is ever replaced, so a foreign hook the
-//! user bundled into the same entry survives. Codex runs no hook until the
-//! user has trusted it interactively (`pm doctor` reports a missing trust
-//! entry) and keys that trust on the entry's index, so pm appends its
-//! entries and existing ones keep their positions.
+//! user bundled into the same entry survives. Codex runs no hook until it
+//! is trusted (`pm doctor` reports a missing trust entry) and keys that
+//! trust on the entry's index, so pm appends its entries and existing ones
+//! keep their positions.
 
 use std::path::Path;
 
@@ -114,6 +114,17 @@ pub fn user_hooks_root(harness: Harness, home: &Path) -> Result<Option<Value>> {
     }
     let content = std::fs::read_to_string(&path)?;
     Ok(serde_json::from_str::<Value>(&content).ok())
+}
+
+/// Where each of `harness`'s pm hooks sits in `root`, as (event, entry,
+/// inner hook); a hook not installed is left out.
+pub fn pm_hook_positions(harness: Harness, root: &Value) -> Vec<(&'static str, usize, usize)> {
+    super::pm_events(harness)
+        .into_iter()
+        .filter_map(|(event, markers)| {
+            pm_hook_position(root, event, markers).map(|(entry, hook)| (event, entry, hook))
+        })
+        .collect()
 }
 
 /// Where pm's hook sits under `hooks.<event>`: the entry index and the

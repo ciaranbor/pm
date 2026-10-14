@@ -255,7 +255,8 @@ their next idle, once the turn ends with nothing unread; a turn is never
 cut short. Left running and listed with the command that restarts them: one
 whose configured harness changed (a restart would start its conversation
 over), and one that would not relaunch — no model row, or codex hooks not
-yet trusted. A dead agent picks up the change at its next spawn. `pm
+yet trusted (pm trusts them first if you consented; see
+[docs/harnesses.md](docs/harnesses.md)). A dead agent picks up the change at its next spawn. `pm
 update` covers every registered project, since the bundled assets and
 hooks it installs are the machine's; a project it can't upgrade gets its
 own line and the rest go ahead. `--dry-run` judges agents against the assets
@@ -294,8 +295,9 @@ and merges or deletes a feature only when you name it. A skill only it sees,
 each task; pm rewrites it at `pm onboard` and `pm update`.
 
 `pm onboard` sets it up. It reports which harnesses are installed, logged
-in and trusted, asks which one the supervisor runs on (`--harness` skips
-the question), and saves the answer as `[agents.harness] supervisor`.
+in and trusted, asks once whether pm may trust its own hooks in codex,
+asks which one the supervisor runs on (`--harness` skips that question),
+and saves the answer as `[agents.harness] supervisor`.
 Then it creates the home project and leaves you in its `home/main`
 session with the supervisor, which starts by onboarding you. Run it again
 any time: once home exists it just opens home.
@@ -810,8 +812,8 @@ reviewer, a local model for qa. Any value besides the three is an error at
 spawn; pm never falls back. A conversation is resumed only on the harness
 that produced it, so after a harness change the next respawn starts fresh
 (and says so) and `pm agent fork` refuses; `pm harness list` shows the
-harnesses, `pm agent list` each agent's. **codex needs one interactive
-hook-trust step per machine** and fails silently without it;
+harnesses, `pm agent list` each agent's. **codex needs a one-time consent for pm
+to trust its hooks** and fails silently without that trust;
 [docs/harnesses.md](docs/harnesses.md) has that and what each harness needs.
 
 **`home`**, in the global config only, names this machine's

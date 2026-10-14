@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use crate::harness::{Harness, opencode};
+use crate::harness::{Harness, codex, opencode};
 use crate::state::project::HarnessConfig;
 
 impl Harness {
@@ -47,6 +47,16 @@ impl Harness {
         match self {
             Harness::ClaudeCode | Harness::Codex => Vec::new(),
             Harness::OpenCode => opencode::config_issues(&config.opencode, worktree, rows),
+        }
+    }
+
+    /// Keys of the harness's `[harness.<name>]` section pm no longer reads,
+    /// as dotted paths, each with what to do instead. Config loading drops
+    /// them silently, so only `pm doctor` tells.
+    pub fn retired_config_keys(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Harness::ClaudeCode | Harness::OpenCode => &[],
+            Harness::Codex => codex::RETIRED_CONFIG_KEYS,
         }
     }
 

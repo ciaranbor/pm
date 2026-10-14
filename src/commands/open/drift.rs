@@ -48,6 +48,7 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::AgentRowInvalid
         | IssueKind::AgentRowRemark
         | IssueKind::HarnessConfigInvalid
+        | IssueKind::UnreadConfigKey
         | IssueKind::ProviderKeyUnset
         | IssueKind::ProviderUnreachable
         | IssueKind::RebaseInProgress
