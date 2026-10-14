@@ -733,6 +733,20 @@ pub enum AgentCommands {
         #[command(flatten)]
         target: ProjectFlag,
     },
+    /// Show an agent's permission mode, or switch it (Claude Code and codex
+    /// agents)
+    Mode {
+        /// Agent name
+        name: String,
+        /// The mode to switch to, in the harness's own ids (run without it to
+        /// list them)
+        mode: Option<String>,
+        /// Target scope (feature name or "main"; defaults to current scope)
+        #[arg(long)]
+        scope: Option<String>,
+        #[command(flatten)]
+        target: ProjectFlag,
+    },
     /// Fork an existing agent: spawn a new agent that starts with a copy of the source's conversation history
     Fork {
         /// Source agent name to fork from (can be running or stopped)

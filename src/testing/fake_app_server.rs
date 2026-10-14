@@ -1,11 +1,12 @@
 //! A stand-in for an agent's `codex app-server`, recording the JSON-RPC
 //! messages its clients send. It holds one thread, `t1`, sends a
 //! notification ahead of every answer, and refuses a turn of thread
-//! `missing`.
+//! `missing`. The thread's collaboration mode starts as `default`, on model
+//! `gpt-5.5-codex`, and follows `thread/settings/update`.
 
 use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -22,9 +23,13 @@ impl FakeAppServer {
         let path = dir.join("app.sock");
         let listener = UnixListener::bind(&path).unwrap();
         let (tx, requests) = mpsc::channel();
+        let mode = Arc::new(Mutex::new(json!({"mode": "default", "settings": {
+            "model": "gpt-5.5-codex", "reasoning_effort": null, "developer_instructions": null,
+        }})));
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let tx = tx.clone();
+                let mode = mode.clone();
                 std::thread::spawn(move || {
                     let Ok(mut ws) = tungstenite::accept(stream) else {
                         return;
@@ -34,7 +39,7 @@ impl FakeAppServer {
                             continue;
                         };
                         let id = request.get("id").cloned();
-                        let reply = answer(&request);
+                        let reply = answer(&request, &mode);
                         if tx.send(request).is_err() {
                             return;
                         }
@@ -71,9 +76,22 @@ impl FakeAppServer {
     }
 }
 
-fn answer(request: &Value) -> Value {
+fn answer(request: &Value, mode: &Mutex<Value>) -> Value {
     let params = &request["params"];
     match request["method"].as_str().unwrap_or_default() {
+        "thread/resume" => json!({"result": {
+            "model": "gpt-5.5-codex",
+            "reasoningEffort": null,
+            "collaborationMode": *mode.lock().unwrap(),
+        }}),
+        "collaborationMode/list" => json!({"result": {"data": [
+            {"name": "Plan", "mode": "plan", "model": null, "reasoning_effort": "medium"},
+            {"name": "Default", "mode": "default", "model": null, "reasoning_effort": null},
+        ]}}),
+        "thread/settings/update" => {
+            *mode.lock().unwrap() = params["collaborationMode"].clone();
+            json!({"result": {}})
+        }
         "thread/loaded/list" => json!({"result": {"data": ["t1"]}}),
         "turn/start" if params["threadId"] == "missing" => {
             json!({"error": {"code": -32600, "message": "no thread missing"}})

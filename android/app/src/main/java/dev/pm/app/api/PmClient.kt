@@ -96,6 +96,17 @@ data class Delivered(
         get() = delivery == "queued"
 }
 
+/** A mode an agent may be put in, by its harness's id for it. */
+@Serializable data class ModeOption(val id: String, val label: String)
+
+/** An agent's permission mode (`GET …/mode`): null when the server can't read it. */
+@Serializable
+data class AgentMode(val mode: String? = null, val modes: List<ModeOption> = emptyList()) {
+    /** What the mode is called, its id when it isn't one a device may pick. */
+    val label: String?
+        get() = mode?.let { id -> modes.find { it.id == id }?.label ?: id }
+}
+
 /** One server-sent event. */
 data class ServerEvent(val name: String, val data: String)
 
@@ -269,6 +280,33 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         post(
             url("agents", project, scope, agent, "keys"),
             json.encodeToString(KeysBody.serializer(), KeysBody(keys)),
+        )
+    }
+
+    /**
+     * The agent's permission mode and those it may be put in; null for an agent whose mode pm
+     * doesn't switch, or from a server that predates it.
+     */
+    suspend fun mode(project: String, scope: String, agent: String): AgentMode? =
+        try {
+            json.decodeFromString(
+                AgentMode.serializer(),
+                get(url("agents", project, scope, agent, "mode")),
+            )
+        } catch (e: PmError.Status) {
+            if (e.code == 404) null else throw e
+        } catch (e: PmError.Unsupported) {
+            null
+        }
+
+    /**
+     * Put the agent in `mode`, one of its [AgentMode.modes]; returns once it is seen in it. Refused
+     * (`asking`, `unavailable`, `mode-unknown`, `unchanged`, …) when it can't be.
+     */
+    suspend fun setMode(project: String, scope: String, agent: String, mode: String) {
+        post(
+            url("agents", project, scope, agent, "mode"),
+            json.encodeToString(ModeBody.serializer(), ModeBody(mode)),
         )
     }
 
@@ -504,6 +542,8 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
     @Serializable private data class DialogList(val dialogs: List<Dialog>)
 
     @Serializable private data class KeysBody(val keys: List<String>)
+
+    @Serializable private data class ModeBody(val mode: String)
 
     @Serializable private data class RestartBody(val force: Boolean)
 

@@ -1,10 +1,11 @@
 //! Input from the user that reaches an agent other than at its window:
 //! text, an interrupt, or keys, typed into its pane as if at the keyboard
-//! (`pm serve`'s write endpoints). Text is never sent as a continuation, so
-//! its UserPromptSubmit resets a blocked feature and the transcript records
-//! the user's words as the user's. A dialog a hook can see is answered
-//! through its harness instead ([`super::hooks_dialog`]), and one no hook
-//! holds by typing the harness's own reply ([`type_reply`]).
+//! (`pm serve`'s write endpoints), and its permission mode ([`set_mode`]).
+//! Text is never sent as a continuation, so its UserPromptSubmit resets a
+//! blocked feature and the transcript records the user's words as the
+//! user's. A dialog a hook can see is answered through its harness instead
+//! ([`super::hooks_dialog`]), and one no hook holds by typing the harness's
+//! own reply ([`type_reply`]).
 //!
 //! Keys reach whatever the pane shows, so each send first checks the agent
 //! is active, its pane runs its harness, and the pane is out of copy mode.
@@ -31,8 +32,10 @@ use crate::tmux::{self, Pane};
 use super::running_agents::{AgentAt, Liveness, Windows, classify};
 
 mod interrupt;
+mod mode;
 
 pub use interrupt::interrupt;
+pub use mode::{current_mode, set_mode, unknown_mode};
 
 /// The keys a device may press, by tmux's names for them.
 pub const KEYS: &[&str] = &[
@@ -92,6 +95,12 @@ pub enum Refusal {
     Asking(String),
     /// The input line holds a draft, or isn't on screen.
     NotAtPrompt,
+    /// The mode asked for isn't one this session can be put in.
+    Unavailable,
+    /// The agent's screen doesn't show its mode, so nothing was pressed.
+    ModeUnknown,
+    /// The agent's mode didn't change when asked to.
+    Unchanged,
 }
 
 impl Refusal {
@@ -103,6 +112,9 @@ impl Refusal {
             Self::NotRunning => "not-running",
             Self::Asking(_) => "asking",
             Self::NotAtPrompt => "not-at-prompt",
+            Self::Unavailable => "unavailable",
+            Self::ModeUnknown => "mode-unknown",
+            Self::Unchanged => "unchanged",
         }
     }
 }
@@ -117,6 +129,9 @@ impl std::fmt::Display for Refusal {
             Self::NotAtPrompt => {
                 f.write_str("the agent's input line is not empty, or not on screen")
             }
+            Self::Unavailable => f.write_str("that mode isn't available for this agent"),
+            Self::ModeUnknown => f.write_str("the agent's mode isn't on its screen"),
+            Self::Unchanged => f.write_str("the agent's mode did not change"),
         }
     }
 }

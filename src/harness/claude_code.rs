@@ -32,11 +32,15 @@
 //! its file watcher (verified on 2.1.272), so a new release's hook entries
 //! need no restart. Its definition, `--append-system-prompt-file` and flags
 //! are read only at launch.
+//!
+//! Its permission mode changes only by ⇧Tab and is read off the footer
+//! ([`mode`]).
 
 pub(super) mod chat;
 pub(super) mod dialog;
 pub(super) mod inbound;
 pub(super) mod input;
+pub(super) mod mode;
 pub(super) mod sessions;
 pub(super) mod transcript;
 pub(super) mod waiting;

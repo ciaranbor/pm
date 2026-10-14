@@ -94,6 +94,7 @@ The API is under `/v1`; every path needs a paired device's token:
 | `agents/{project}/{scope}/{agent}/type` | `POST {"text"}` (up to 4 KB, no control characters): typed into the pane as keys with nothing pressed after, for a dialog that takes text (a login code) |
 | `agents/{project}/{scope}/{agent}/dialog` | `GET`: the oldest of the agent's dialogs that can be answered remotely (below), the one its terminal shows first, else `404`; `POST {"id", "choice", "answers"?, "message"?}`: answers the open dialog `id` names, `{"answered": true}` once its harness has the answer |
 | `agents/{project}/{scope}/{agent}/dialogs` | `GET`: `{"dialogs": [Dialog, …]}`, every dialog of the agent's that can be answered remotely, oldest first; empty when none |
+| `agents/{project}/{scope}/{agent}/mode` | `GET`: `{"mode", "modes": [{"id", "label"}, …]}`, the agent's [permission mode](#permission-mode) (`null` when it can't be read) and those a device may pick; `404` for a harness pm doesn't switch (opencode). `POST {"mode"}`, one of `modes` (else `400`): `{"mode"}` once the agent is seen in it |
 | `features/{project}/{feature}/merge` | `GET`: `{"mergeable", "reason"}`, whether a merge would land the branch as it stands, checked in git as asked; `reason` (`null` when mergeable) is a few words for a button: what `pm feat merge` would refuse (uncommitted changes, a merge or rebase paused in the feature's or its base's worktree, a base with no checkout), or `Behind <base>: rebase first` when the branch doesn't contain its base, which `pm feat merge` would join with a merge commit nobody reviewed. `POST`: `pm feat merge`, so merges and deletes the feature; `{"merged": true, "warnings"}` |
 | `features/{project}/{feature}/delete` | `POST`: `pm feat delete`; `{"deleted": true, "warnings"}` |
 | `agents/{project}/{scope}/{agent}/restart` | `POST {"force"?}`: `pm agent restart`; `{"restarted": <what it did>}` |
@@ -109,6 +110,27 @@ dropped is `410`, so the client predates the server. A registered project
 that isn't [on this machine](../README.md#around-a-reboot) is `404`
 `{"error": "project not on this machine"}`, except to `delete`, which
 unregisters it as `pm delete` does.
+
+### Permission mode
+
+Mode ids are the harness's own: Claude Code's `default` (its UI says
+Manual), `acceptEdits`, `plan`, `auto`, `bypassPermissions`, and `dontAsk`,
+which a session can show but never return to; codex's collaboration modes
+`default` and `plan`, its permission presets left alone. A Claude Code
+agent is switched as its user would, by shift+tab, one step at a time, so a
+switch can't be made while a dialog is up — shift+tab would act on the
+dialog — and passes through the modes between, mid-turn too: a tool call
+made meanwhile runs under that mode's policy, as under the same presses at
+the keyboard. A `POST` refused comes back as `409` with `{"error",
+"refused"}`: `asking` (a dialog is up), `mode-unknown` (the mode isn't on
+its screen, so nothing was pressed), `unavailable` (the mode isn't in this
+session's cycle — `auto` on an account without it, `bypassPermissions`
+without `--allow-dangerously-skip-permissions`; the full cycle leaves the
+agent where it started), `unchanged` (the mode didn't change when asked
+to), `not-running`, `no-window` or `inactive`. The snapshot doesn't carry
+the mode: reading a Claude Code agent's takes a capture of its screen.
+
+`pm agent mode <name> [<mode>]` shows or switches the mode the same way.
 
 Each action runs pm's own handler, never with `--force`, to the end
 however long it takes (the post-merge hook runs in the base session's

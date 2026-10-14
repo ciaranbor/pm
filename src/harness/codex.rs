@@ -74,6 +74,7 @@ pub(super) mod guard;
 pub(super) mod hook_trust;
 pub(super) mod host;
 pub(super) mod input;
+pub(super) mod mode;
 pub(super) mod sessions;
 pub(super) mod transcript;
 pub(super) mod waiting;

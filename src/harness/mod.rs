@@ -27,6 +27,7 @@ mod seams {
     mod hooks;
     mod input;
     mod launch;
+    pub(super) mod mode;
     pub(super) mod never_idle;
     mod sessions;
 }
@@ -42,6 +43,7 @@ pub use probe::Probe;
 pub(crate) use projection::project_by_copy;
 pub use projection::{Projection, ProjectionScope};
 pub use seams::config::{ConfigIssue, ConfigIssueKind};
+pub use seams::mode::ModeSwitch;
 pub use seams::never_idle::{WaitingEvent, Wake};
 pub use session_store::{
     AgentSession, Conversation, ExportJob, ImportOutcome, InUse, SessionStore,

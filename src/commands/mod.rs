@@ -3,6 +3,7 @@ pub mod agent_fork;
 pub mod agent_input;
 pub mod agent_list;
 pub mod agent_log;
+pub mod agent_mode;
 pub mod agent_read;
 pub mod agent_rearm;
 pub mod agent_restart;
