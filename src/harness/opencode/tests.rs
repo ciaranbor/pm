@@ -19,6 +19,7 @@ fn pre(session: &str) -> PreLaunch {
         ],
         env_remove: vec![CONFIG_CONTENT_ENV.to_string()],
         notes: Vec::new(),
+        settings_file: None,
     }
 }
 

@@ -311,6 +311,7 @@ mod tests {
             detail: "Bash: git clean -fdx".into(),
             reason: None,
             since: chrono::Utc::now(),
+            command: Some("git clean -fdx".into()),
         };
         runtime::write_denial(&project, "main", "main", &denial).unwrap();
         on_prompt(&project, "main", "main", "go on").unwrap();

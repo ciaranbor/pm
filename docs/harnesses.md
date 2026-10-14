@@ -98,6 +98,13 @@ The default harness; it needs no setup beyond `claude` on your `PATH`
   directory with `--add-dir`, the orchestrator the information store too.
   It passes no `--permission-mode` unless an `[agents.permissions]` row
   sets one, so your own Claude Code default (auto mode, say) applies.
+- Every agent is launched with allow rules for pm's commands that only
+  read or touch its own state (`pm msg read`/`list`, `pm workflow show`,
+  `pm feat status`, `pm feat summary path`), so auto mode's classifier
+  never refuses one run on its own; `pm msg send` is left to it. A
+  `pm msg read` it refuses anyway (an agent launched before these rules,
+  say) stops the agent's never-idle loop at once, with a notice naming the
+  fix, rather than waking the agent for a read it can't make.
 - A feature gets main's `.claude/settings.json` when created; `pm harness
   settings list|diff|pull|push|merge` compares and syncs the two later.
   `settings.local.json` is shared by every worktree at the main checkout,

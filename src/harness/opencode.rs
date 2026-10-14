@@ -316,6 +316,7 @@ pub(super) fn pre_launch(
         env,
         env_remove: vec![CONFIG_CONTENT_ENV.to_string()],
         notes,
+        settings_file: None,
     })
 }
 

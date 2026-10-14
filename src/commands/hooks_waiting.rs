@@ -14,7 +14,9 @@
 //! Interrupt hook 3 s.
 //!
 //! It also records a tool call the harness's classifier refused
-//! ([`Harness::denial`]).
+//! ([`Harness::denial`]), and stops the agent's never-idle loop
+//! ([`runtime::trip_loop`]) when that call was its `pm msg read`, rather
+//! than wake it again for a read it can't make.
 //!
 //! It runs on every tool call, so the common path — a tool finished, no
 //! marker — costs one stamp of the agent's activity, one failed unlink and
@@ -70,10 +72,7 @@ fn waiting_inner(
     };
     let (project_root, scope) = paths::agent_scope()?;
     runtime::touch_activity(&project_root, &scope, &agent)?;
-    if let Some(denial) = harness.denial(&payload) {
-        runtime::write_denial(&project_root, &scope, &agent, &denial)?;
-        *denied = true;
-    }
+    record_denial(&project_root, &scope, &agent, harness, &payload, denied)?;
     let Some(state) = settle(&project_root, &scope, &agent, harness, &payload)? else {
         return Ok(None);
     };
@@ -82,6 +81,35 @@ fn waiting_inner(
         return Ok(Some((AgentState::Busy, unread)));
     }
     Ok(Some((state, unread)))
+}
+
+/// Record the tool call `payload` says the classifier refused, if any,
+/// stopping the agent's loop at once when it was the inbox read: every wake
+/// would ask for the read the classifier refuses. Sets `denied` once the
+/// denial is recorded.
+fn record_denial(
+    project_root: &Path,
+    scope: &str,
+    agent: &str,
+    harness: Harness,
+    payload: &serde_json::Value,
+    denied: &mut bool,
+) -> Result<()> {
+    let Some(denial) = harness.denial(payload) else {
+        return Ok(());
+    };
+    runtime::write_denial(project_root, scope, agent, &denial)?;
+    *denied = true;
+    if denial.is_inbox_read() {
+        let why = format!(
+            "the permission classifier denied `pm msg read`, so this agent cannot read its \
+             inbox ({}). Allow `pm msg read` (a `Bash(pm msg read *)` allow rule, which an \
+             agent spawned by this pm has), then `pm agent restart {agent} --scope {scope}`",
+            denial.describe()
+        );
+        runtime::trip_loop(project_root, scope, agent, &why)?;
+    }
+    Ok(())
 }
 
 /// Re-arm an agent an interrupt left with `unread` messages, when its
@@ -466,6 +494,45 @@ mod tests {
             Some(AgentState::Busy)
         );
         assert_eq!(kind(root), None);
+    }
+
+    #[test]
+    fn a_denied_inbox_read_stops_the_loop_and_another_denial_does_not() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let deny = |command: &str| {
+            let payload = json!({"hook_event_name": "PermissionDenied", "tool_name": "Bash",
+                                 "tool_input": {"command": command},
+                                 "reason": "acts on the previewed message"});
+            let mut denied = false;
+            record_denial(
+                root,
+                "login",
+                "implementer",
+                Harness::ClaudeCode,
+                &payload,
+                &mut denied,
+            )
+            .unwrap();
+            denied
+        };
+        let stopped = || runtime::loop_tripped(root, "login", "implementer");
+
+        for command in [
+            "git push --force",
+            "pm msg read; rm -rf build",
+            "pm msg send qa hi",
+        ] {
+            assert!(deny(command), "{command} is recorded");
+            assert_eq!(stopped(), None, "{command}");
+        }
+        assert!(deny("pm msg read --from reviewer"));
+        let why = stopped().expect("the loop stops");
+        assert!(why.contains("`pm msg read`"), "{why}");
+        assert!(
+            why.contains("pm agent restart implementer --scope login"),
+            "{why}"
+        );
     }
 
     #[test]

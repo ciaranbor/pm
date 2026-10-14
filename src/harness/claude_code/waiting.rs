@@ -104,6 +104,10 @@ pub(in crate::harness) fn denial(payload: &Value) -> Option<Denial> {
         detail: tool_detail(payload),
         reason: text("reason").filter(|r| !r.is_empty()),
         since: chrono::Utc::now(),
+        command: (payload.get("tool_name").and_then(Value::as_str) == Some("Bash"))
+            .then(|| payload.pointer("/tool_input/command")?.as_str())
+            .flatten()
+            .map(str::to_string),
     })
 }
 

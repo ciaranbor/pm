@@ -92,6 +92,8 @@ pub struct PreLaunch {
     pub env_remove: Vec<String>,
     /// Remarks for the spawn line.
     pub notes: Vec<String>,
+    /// A settings file written for this spawn, which the command line names.
+    pub settings_file: Option<PathBuf>,
 }
 
 /// A session id is bound to the harness that produced it. Returns the id
@@ -131,14 +133,17 @@ mod tests {
                 protected_dirs: &protected,
             },
             &HarnessConfig::default(),
-            &PreLaunch::default(),
+            &PreLaunch {
+                settings_file: Some("/proj/.pm/runtime/login/reviewer/claude-settings.json".into()),
+                ..Default::default()
+            },
         );
         assert_eq!(
             cmd,
             "claude --agent reviewer -n 'reviewer.login' --model 'opus' \
              --append-system-prompt-file '/proj/main/.agents/pm-baseline.md' \
              --permission-mode 'acceptEdits' --add-dir='/proj/.pm/summaries' \
-             --settings '{\"permissions\":{\"deny\":[\"Edit(//proj/main/**)\"]}}' \
+             --settings '/proj/.pm/runtime/login/reviewer/claude-settings.json' \
              --resume abc123 --fork-session 'go'"
         );
     }
