@@ -738,16 +738,22 @@ impl ScopeReader<'_> {
                 detail: w.describe(),
                 since: Some(w.since),
                 dialog: dialog.map(|record| record.dialog.id),
-            })
-            .or_else(|| {
-                let reason = harness.loop_stopped(self.project_root, scope, agent)?;
-                Some(WaitingSnapshot {
-                    kind: WaitingKind::Tripped,
-                    detail: format!("loop stopped: {reason}"),
-                    since: None,
-                    dialog: None,
-                })
             });
+        // A stopped loop overrides any marker but an asking one: whatever
+        // the agent is at, nothing wakes it.
+        let asking = waiting
+            .as_ref()
+            .is_some_and(|w| w.kind.class() == WaitingClass::Asking);
+        let stopped = (!asking)
+            .then(|| harness.loop_stopped(self.project_root, scope, agent))
+            .flatten()
+            .map(|reason| WaitingSnapshot {
+                kind: WaitingKind::Tripped,
+                detail: format!("loop stopped: {reason}"),
+                since: None,
+                dialog: None,
+            });
+        let waiting = stopped.or(waiting);
         let Some(waiting) = waiting else {
             return (AgentState::Busy, None);
         };
@@ -1396,6 +1402,42 @@ mod tests {
         assert!(!login.working, "a busy agent silent for 30 minutes");
         let quiet = Utc::now() - login.last_activity.unwrap();
         assert_eq!(quiet.num_minutes(), 25, "the latest of its agents");
+    }
+
+    #[test]
+    fn a_stopped_loop_shows_its_reason_over_any_marker_but_a_dialog() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let session = tmux::session_name(&project_name, "login");
+        server.spawn_fake_agent(&project, &session, "login", "qa");
+        runtime::trip_loop(&project, "login", "qa", "inbox unreadable").unwrap();
+        let shown = |kind: Option<WaitingKind>| {
+            match kind {
+                Some(kind) => {
+                    let marker = Waiting::now(kind, Some("Which DB?".into()));
+                    runtime::write_waiting(&project, "login", "qa", &marker).unwrap();
+                }
+                None => {
+                    runtime::clear_waiting(&project, "login", "qa").unwrap();
+                }
+            }
+            let login = &super::project(&project, server.name()).unwrap().features[0];
+            let qa = &login.agents[0];
+            (qa.state, qa.waiting.as_ref().unwrap().detail.clone())
+        };
+        let stopped = (
+            AgentState::Unarmed,
+            "loop stopped: inbox unreadable".to_string(),
+        );
+
+        assert_eq!(shown(None), stopped);
+        assert_eq!(shown(Some(WaitingKind::Prompt)), stopped);
+        assert_eq!(shown(Some(WaitingKind::Background)), stopped);
+        assert_eq!(
+            shown(Some(WaitingKind::Question)),
+            (AgentState::Asking, "Which DB?".to_string())
+        );
     }
 
     #[test]
