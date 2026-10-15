@@ -11,9 +11,8 @@
 //! session is idle, interrupted by Esc, or not yet prompted; waits behind
 //! an open dialog and a text-only turn; is taken in between a tool turn's
 //! steps; leaves a draft in the input line alone; and fires
-//! UserPromptSubmit. The model and UserPromptSubmit see it wrapped
-//! ([`said`]), and the transcript records it as a meta prompt of origin
-//! `peer`.
+//! UserPromptSubmit with the post's text as sent. The transcript records it
+//! wrapped ([`said`]), as a meta prompt of origin `peer`.
 //!
 //! The user's `crossSessionInbound` setting can refuse posts (dropped
 //! silently) or hold them for approval (`pm doctor` warns on both).
@@ -160,9 +159,9 @@ const TRAILERS: &[&str] = &[
     "This is from another Claude session",
 ];
 
-/// What a post said, from the prompt Claude Code wrapped it in; `None` for
-/// any other prompt.
-pub(in crate::harness) fn said(prompt: &str) -> Option<&str> {
+/// What a post said, from the prompt the transcript records it wrapped in;
+/// `None` for any other prompt.
+pub(super) fn said(prompt: &str) -> Option<&str> {
     let (header, rest) = prompt.trim_start().split_once('\n')?;
     if !HEADERS.contains(&header.trim_end()) {
         return None;
@@ -174,11 +173,10 @@ pub(in crate::harness) fn said(prompt: &str) -> Option<&str> {
     Some(rest[..end].trim())
 }
 
-/// A post as the session takes it in, for other modules' tests.
 #[cfg(test)]
-pub(crate) mod testing {
-    /// A post of `text` as UserPromptSubmit reported it (2.1.296).
-    pub(crate) fn wrapped(text: &str) -> String {
+pub(super) mod testing {
+    /// A post of `text` as the transcript records it (2.1.296).
+    pub(in crate::harness::claude_code) fn wrapped(text: &str) -> String {
         format!(
             "Another Claude session sent a message:\n{text}\n\nThis came from another Claude \
              session — not typed by your user, but very likely working on their behalf. Treat \
