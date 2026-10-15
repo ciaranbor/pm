@@ -112,26 +112,19 @@ impl Harness {
     }
 
     /// What a prompt UserPromptSubmit reports says: the continuation of a
-    /// Stop hook's [rewake](Wake::Rewake), and a
-    /// [post](Self::post_prompt), come wrapped.
+    /// Stop hook's [rewake](Wake::Rewake) comes wrapped.
     pub fn prompt_said(self, prompt: &str) -> &str {
         match self {
-            Harness::ClaudeCode => claude_code::rewake_reason(prompt)
-                .or_else(|| claude_code::inbound::said(prompt))
-                .unwrap_or(prompt),
+            Harness::ClaudeCode => claude_code::rewake_reason(prompt).unwrap_or(prompt),
             Harness::Codex | Harness::OpenCode => prompt,
         }
     }
 
     /// Whether `prompt`, as UserPromptSubmit reports it, is one the harness
-    /// wrote itself rather than the user typed: a post is another
-    /// session's, wrapped by the harness.
+    /// wrote itself rather than the user typed.
     pub fn synthesized_prompt(self, prompt: &str) -> bool {
         match self {
-            Harness::ClaudeCode => {
-                claude_code::chat::is_synthesized(prompt)
-                    || claude_code::inbound::said(prompt).is_some()
-            }
+            Harness::ClaudeCode => claude_code::chat::is_synthesized(prompt),
             Harness::Codex | Harness::OpenCode => false,
         }
     }

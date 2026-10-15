@@ -390,8 +390,7 @@ mod tests {
 
     /// Claude Code's prompts for a rewake carrying `reason`, naming the
     /// hook by its event, by pm's own command, whose quotes the reason must
-    /// be found past (2.1.289), and as SessionStart's waiter (2.1.294); and
-    /// for a post of it to the session's socket (2.1.296).
+    /// be found past (2.1.289), and as SessionStart's waiter (2.1.294).
     fn rewakes(reason: &str) -> Vec<String> {
         let command = crate::commands::hooks_install::stop_hook_command(Harness::ClaudeCode);
         [
@@ -409,9 +408,6 @@ mod tests {
                 if named.starts_with(':') { "" } else { " " }
             )
         })
-        .chain(std::iter::once(
-            crate::harness::claude_code_inbound_testing::wrapped(reason),
-        ))
         .collect()
     }
 
@@ -438,20 +434,6 @@ mod tests {
                 Some(idle.clone())
             );
         }
-        assert_eq!(state(&project).progress, Progress::Blocked);
-    }
-
-    #[test]
-    fn another_sessions_message_is_not_the_user() {
-        let dir = tempdir().unwrap();
-        let project = blocked_feature(dir.path());
-        register(&project, Harness::ClaudeCode);
-        let post = crate::harness::claude_code_inbound_testing::wrapped("can you review #42?");
-
-        assert_eq!(
-            on_prompt(&project, "login", "implementer", &post).unwrap(),
-            Prompted::Taken
-        );
         assert_eq!(state(&project).progress, Progress::Blocked);
     }
 
