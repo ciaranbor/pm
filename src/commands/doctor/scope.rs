@@ -252,6 +252,7 @@ impl ScopeCheck<'_> {
             } else {
                 issues.extend(agent_issues(
                     self.project_root,
+                    self.project_name,
                     scope,
                     &session_name,
                     self.tmux_server,

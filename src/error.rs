@@ -38,6 +38,12 @@ pub enum PmError {
     NotHere { name: String },
 
     #[error(
+        "tmux session '{session}' is not running (the project is closed, or its last agent \
+         was stopped): run `pm open --project {project}`, then retry"
+    )]
+    SessionNotRunning { session: String, project: String },
+
+    #[error(
         "{} holds pm state but no main checkout: `pm restore` or `pm delete` its project",
         .0.display()
     )]

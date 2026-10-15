@@ -22,6 +22,7 @@ pub(crate) const START_GRACE: Duration = Duration::from_secs(60);
 /// Findings about `scope`'s active agents, given its tmux session exists.
 pub(super) fn agent_issues(
     project_root: &Path,
+    project_name: &str,
     scope: &str,
     session_name: &str,
     tmux_server: Option<&str>,
@@ -76,7 +77,13 @@ pub(super) fn agent_issues(
             });
             continue;
         }
-        issues.extend(loop_issue(project_root, scope, agent_name, entry));
+        issues.extend(loop_issue(
+            project_root,
+            project_name,
+            scope,
+            agent_name,
+            entry,
+        ));
         if let Some(config) = &config
             && launch_stamp::is_stale(project_root, scope, agent_name, entry, config, &global)
                 .unwrap_or(false)
@@ -131,15 +138,24 @@ fn session_started(project_root: &Path, scope: &str, agent: &str) -> bool {
 /// Whether `agent`'s never-idle loop stopped itself, or its last turn
 /// failed while the loop still retries. Not fixable here: a restart re-arms
 /// the loop, but whatever stopped it (a model that fails every turn, an
-/// inbox the agent cannot read) would stop it again.
-fn loop_issue(project_root: &Path, scope: &str, name: &str, entry: &AgentEntry) -> Option<Issue> {
+/// inbox the agent cannot read) would stop it again. The restart command
+/// names the project, so it runs from anywhere.
+fn loop_issue(
+    project_root: &Path,
+    project_name: &str,
+    scope: &str,
+    name: &str,
+    entry: &AgentEntry,
+) -> Option<Issue> {
     // A stopped loop's reason already carries the last turn's error.
     if let Some(reason) = entry.harness.loop_stopped(project_root, scope, name) {
+        let reason = reason.trim_end_matches('.');
         return Some(Issue {
             kind: IssueKind::LoopStopped,
             message: format!(
                 "agent '{name}' no longer wakes for messages — its never-idle loop \
-                 stopped: {reason}. Fix the cause, then `pm agent restart {name}`"
+                 stopped: {reason}. Fix the cause, then `pm agent restart {name} --scope \
+                 {scope} --project {project_name}`"
             ),
             fix: Fix::None,
         });
@@ -217,8 +233,9 @@ mod tests {
         };
         let opencode = entry(Harness::OpenCode);
         let native = entry(Harness::ClaudeCode);
-        let loop_issues =
-            |scope, entry| Vec::from_iter(loop_issue(&project_path, scope, "reviewer", entry));
+        let loop_issues = |scope, entry| {
+            Vec::from_iter(loop_issue(&project_path, "app", scope, "reviewer", entry))
+        };
 
         assert!(loop_issues("login", &opencode).is_empty());
 
@@ -281,7 +298,8 @@ mod tests {
             messages(&issues, IssueKind::LoopStopped),
             vec![
                 "agent 'reviewer' no longer wakes for messages — its never-idle loop stopped: 5 \
-                 consecutive turns read none. Fix the cause, then `pm agent restart reviewer`"
+                 consecutive turns read none. Fix the cause, then `pm agent restart reviewer \
+                 --scope login --project app`"
             ]
         );
         assert!(messages(&issues, IssueKind::TurnFailed).is_empty());

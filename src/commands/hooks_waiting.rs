@@ -104,7 +104,7 @@ fn record_denial(
         let why = format!(
             "the permission classifier denied `pm msg read`, so this agent cannot read its \
              inbox ({}). Allow `pm msg read` (a `Bash(pm msg read *)` allow rule, which an \
-             agent spawned by this pm has), then `pm agent restart {agent} --scope {scope}`",
+             agent spawned by this pm has)",
             denial.describe()
         );
         runtime::trip_loop(project_root, scope, agent, &why)?;
@@ -529,10 +529,6 @@ mod tests {
         assert!(deny("pm msg read --from reviewer"));
         let why = stopped().expect("the loop stops");
         assert!(why.contains("`pm msg read`"), "{why}");
-        assert!(
-            why.contains("pm agent restart implementer --scope login"),
-            "{why}"
-        );
     }
 
     #[test]
