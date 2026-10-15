@@ -25,7 +25,7 @@ pub(crate) use validate::validate_definition_resolves;
 use std::path::Path;
 
 use crate::commands::running_agents::{AgentAt, exited_pane};
-use crate::error::Result;
+use crate::error::{PmError, Result};
 use crate::harness;
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
@@ -144,6 +144,12 @@ fn spawn_agent(
     let config = ProjectConfig::load(&pm_dir)?;
     let global = GlobalConfig::load_or_default();
     let session_name = tmux::session_name(&config.project.name, feature);
+    if pane.is_none() && !tmux::has_session(tmux_server, &session_name)? {
+        return Err(PmError::SessionNotRunning {
+            session: session_name,
+            project: config.project.name,
+        });
+    }
 
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
@@ -571,6 +577,39 @@ mod tests {
 
         let result = agent_spawn(dir.path(), &feature, "../evil", None, None, server.name());
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn spawn_into_a_closed_session_names_the_open_command_and_changes_nothing() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        tmux::kill_session(server.name(), &session_name).unwrap();
+
+        let err = agent_spawn(
+            dir.path(),
+            &feature,
+            "reviewer",
+            None,
+            Some("brief"),
+            server.name(),
+        )
+        .unwrap_err();
+        let project = ProjectConfig::load(&paths::pm_dir(dir.path()))
+            .unwrap()
+            .project
+            .name;
+        assert!(
+            err.to_string()
+                .contains(&format!("run `pm open --project {project}`")),
+            "{err}"
+        );
+        assert!(!tmux::has_session(server.name(), &session_name).unwrap());
+        let registry = AgentRegistry::load(&paths::agents_dir(dir.path()), &feature).unwrap();
+        assert!(registry.get("reviewer").is_none());
+        let unread = crate::messages::check(&paths::messages_dir(dir.path()), &feature, "reviewer")
+            .unwrap_or_default();
+        assert!(unread.is_empty(), "no context is queued");
     }
 
     #[test]
