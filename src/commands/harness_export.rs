@@ -244,18 +244,7 @@ pub fn export(params: &ExportParams<'_>) -> Result<(PathBuf, Vec<String>)> {
         }
     };
 
-    let status = std::process::Command::new("tar")
-        .args([
-            "-czf",
-            &output_path.to_string_lossy(),
-            "-C",
-            &staging.path().to_string_lossy(),
-            &root_name,
-        ])
-        .status()?;
-    if !status.success() {
-        return Err(PmError::ExportImport("tar command failed".to_string()));
-    }
+    crate::tar::create(&output_path, staging.path(), &root_name)?;
 
     messages.push(format!("Created {}", output_path.display()));
     Ok((output_path, messages))
@@ -366,12 +355,7 @@ pub(super) mod tests {
     /// The manifest of the tarball at `path`.
     fn manifest_of(path: &Path, harness: Harness) -> serde_json::Value {
         let out = tempdir().unwrap();
-        let status = std::process::Command::new("tar")
-            .args(["-xzf", &path.to_string_lossy(), "-C"])
-            .arg(out.path())
-            .status()
-            .unwrap();
-        assert!(status.success());
+        crate::tar::extract(path, out.path()).unwrap();
         let manifest = out.path().join(export_root(harness)).join(MANIFEST);
         serde_json::from_str(&std::fs::read_to_string(manifest).unwrap()).unwrap()
     }

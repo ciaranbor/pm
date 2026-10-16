@@ -230,6 +230,9 @@ pub enum PmError {
     #[error("editor: {0}")]
     Editor(String),
 
+    #[error("{0}")]
+    Tar(String),
+
     #[error("update: {0}")]
     Update(String),
 

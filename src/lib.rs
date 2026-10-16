@@ -15,6 +15,7 @@ pub mod notice;
 pub mod path_utils;
 pub mod state;
 pub mod tailscale;
+pub mod tar;
 #[cfg(test)]
 pub mod testing;
 pub mod text;

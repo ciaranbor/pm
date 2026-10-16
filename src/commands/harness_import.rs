@@ -99,17 +99,7 @@ pub fn import(
     }
 
     let staging = tempfile::tempdir()?;
-    let status = std::process::Command::new("tar")
-        .args([
-            "-xzf",
-            &tarball.to_string_lossy(),
-            "-C",
-            &staging.path().to_string_lossy(),
-        ])
-        .status()?;
-    if !status.success() {
-        return Err(PmError::ExportImport("tar extraction failed".to_string()));
-    }
+    crate::tar::extract(tarball, staging.path())?;
 
     refuse_links(staging.path(), staging.path())?;
 
@@ -582,13 +572,7 @@ mod tests {
         )
         .unwrap();
         let tarball = staging.path().join("legacy.tar.gz");
-        let status = std::process::Command::new("tar")
-            .args(["-czf", &tarball.to_string_lossy(), "-C"])
-            .arg(staging.path())
-            .arg("pm-claude-export")
-            .status()
-            .unwrap();
-        assert!(status.success());
+        crate::tar::create(&tarball, staging.path(), "pm-claude-export").unwrap();
 
         let home = tempdir().unwrap();
         let project = tempdir().unwrap();
@@ -628,13 +612,7 @@ mod tests {
         .unwrap();
         prepare(&root);
         let tarball = dir.join("crafted.tar.gz");
-        let status = std::process::Command::new("tar")
-            .args(["-czf", &tarball.to_string_lossy(), "-C"])
-            .arg(dir)
-            .arg("pm-claude-export")
-            .status()
-            .unwrap();
-        assert!(status.success());
+        crate::tar::create(&tarball, dir, "pm-claude-export").unwrap();
         tarball
     }
 
