@@ -1,5 +1,6 @@
 //! Active agents in a live session: dead windows and harnesses, stopped
-//! loops, stale launches, sessions that never started, legacy names.
+//! loops, stale launches, sessions that never started or reported no wake
+//! channel, legacy names.
 
 use std::path::Path;
 use std::time::{Duration, SystemTime};
@@ -117,6 +118,21 @@ pub(super) fn agent_issues(
                     message: format!(
                         "agent '{agent_name}' is running but its {} session never reported \
                          starting (run `pm agent restart {agent_name} --scope {scope}`)",
+                        entry.harness
+                    ),
+                    fix: Fix::None,
+                });
+            } else if runtime::started_at(project_root, scope, agent_name).is_some()
+                && runtime::read_inbound(project_root, scope, agent_name).is_none()
+            {
+                issues.push(Issue {
+                    kind: IssueKind::NoWakeChannel,
+                    message: format!(
+                        "agent '{agent_name}' is running but its {} session reported no wake \
+                         channel, so once it stops listening nothing wakes it for messages \
+                         until it is prompted or restarted (`pm agent restart {agent_name} \
+                         --scope {scope} --project {project_name}` starts a session that may \
+                         report one)",
                         entry.harness
                     ),
                     fix: Fix::None,
@@ -755,7 +771,26 @@ mod tests {
         save(&|e| e.active = true);
 
         runtime::mark_started(&project_path, "login", "reviewer").unwrap();
+        assert_eq!(
+            login_issues(),
+            vec![(
+                IssueKind::NoWakeChannel,
+                format!(
+                    "agent 'reviewer' is running but its codex session reported no wake channel, \
+                     so once it stops listening nothing wakes it for messages until it is \
+                     prompted or restarted (`pm agent restart reviewer --scope login \
+                     --project {project_name}` starts a session that may report one)"
+                ),
+            )]
+        );
+        let inbound = runtime::Inbound {
+            endpoint: runtime::Endpoint::Socket(dir.path().join("app.sock")),
+            token: None,
+            thread: Some("sess-1".into()),
+        };
+        runtime::write_inbound(&project_path, "login", "reviewer", Some(&inbound)).unwrap();
         assert_eq!(login_issues(), vec![]);
+        runtime::write_inbound(&project_path, "login", "reviewer", None).unwrap();
         runtime::reset_started(&project_path, "login", "reviewer").unwrap();
 
         // Launched by a pm that wrote no start stamp.

@@ -49,8 +49,11 @@ Usage: scripts/sandbox [COMMAND] [OPTIONS] [-- CMD...]
              ~/.config/pm-secrets/claude-token) into the environment of `up`,
              `run` and `shell` — never into a file. Failing both, log in once
              (attach, then /login). `trust` each project dir before spawning
-             agents in it. opencode gets nothing copied: set its providers in
-             pm config ([harness.opencode.providers.<id>])
+             agents in it. opencode gets the caller's pm config providers
+             ([harness.opencode.providers.<id>]) and nothing else: an opencode
+             agent still needs a model row (pm config set --global
+             agents.models.<agent> <provider>/<model>), and a provider's key
+             env var must be set in the caller
   --shell S  shell tmux windows run (default: $SHELL, non-login, no rc files
              since HOME is the sandbox)
 
@@ -188,6 +191,19 @@ up() {
     if [ -f "$HOME/.codex/auth.json" ]; then
       mkdir -p "$home/.codex" && cp "$HOME/.codex/auth.json" "$home/.codex/auth.json"
     fi
+    # The caller's opencode providers, so a real opencode reaches the same
+    # model servers. Entries name their keys by env var, never hold them.
+    # Parses `pm config list`'s display lines (`key = value  (global)`), so a
+    # change to that format breaks this copy.
+    local key value line
+    while IFS= read -r line; do
+      case $line in harness.opencode.providers.*' = '*'  (global)') ;; *) continue ;; esac
+      key=${line%% = *}
+      value=${line#* = }
+      value=${value%  (global)}
+      scrubbed "$pm_bin" config set --global "$key" "$value" >/dev/null \
+        || echo "sandbox: could not copy $key into the sandbox's pm config" >&2
+    done < <("$pm_bin" config list --global harness.opencode.providers 2>/dev/null)
   else
     for h in claude codex opencode; do
       cp "$here/scripts/harness-shim.sh" "$home/bin/$h"

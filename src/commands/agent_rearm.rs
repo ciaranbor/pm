@@ -10,28 +10,21 @@
 //! instead ([`runtime::claim_turn_end`]). The claim comes before the
 //! prompt, and is given back when none is given.
 //!
-//! The prompt is posted to the session's inbound channel when it reported
-//! one ([`Harness::post_prompt`]), which needs no keystroke, so neither the
-//! pane nor the input line matters: the harness holds a post behind an
-//! open dialog and leaves a draft alone. A channel that nothing listens on
-//! any more is an error, and the agent stays unarmed. A session with no
-//! channel is typed into instead, and keystrokes reach whatever the window
-//! shows, so then the pane must not be in use ([`tmux::panes::in_use`]: in
-//! a mode, or in front of an attached client — never cancelled, since
-//! either is the user's), and the harness must read its input line as empty
-//! and taking text. No key is pressed to change the harness's own mode: a
-//! box in vim NORMAL mode, like a dialog, reads as unknown and is left
-//! alone. A draft is never cleared; when any check fails the message just
-//! stays queued and the agent stays visibly unarmed.
+//! The prompt is posted to the session's inbound channel
+//! ([`Harness::post_prompt`](crate::harness::Harness::post_prompt)), which
+//! needs no keystroke, so neither the pane nor the input line matters: the
+//! harness holds a post behind an open dialog and leaves a draft alone. A
+//! session that reported no channel is an error before anything is
+//! claimed, and so is a channel nothing listens on any more; either way the
+//! agent stays unarmed until something prompts it.
 
 use std::path::Path;
 
-use crate::error::Result;
-use crate::harness::Harness;
+use crate::error::{PmError, Result};
 use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, resolve_harness_config};
-use crate::state::runtime::{self, SessionPath, Waiting, WaitingClass, WaitingKind};
+use crate::state::runtime::{self, Waiting, WaitingClass, WaitingKind};
 use crate::tmux;
 
 use super::hooks_stop;
@@ -73,6 +66,14 @@ pub fn rearm(
     .filter(|w| w.kind.class() == WaitingClass::Unarmed && w.kind != WaitingKind::Tripped) else {
         return Ok(None);
     };
+    let Some(inbound) = runtime::read_inbound(project_root, scope, agent) else {
+        return Err(PmError::Agent(format!(
+            "its session reported no wake channel, so nothing wakes it to read this until it \
+             is prompted or restarted (`pm agent restart {agent} --scope {scope} --project {}` \
+             starts a session that may report one)",
+            project.project.name
+        )));
+    };
     let marker = runtime::read_waiting(project_root, scope, agent)
         .filter(|m| m.since == waiting.since && waiting.entry.is_none());
     let entry = waiting.entry.as_deref().unwrap_or_default();
@@ -84,51 +85,19 @@ pub fn rearm(
     if !claimed {
         return Ok(None);
     }
-    let release = || {
-        if let Some(marker) = &marker {
-            runtime::write_waiting(project_root, scope, agent, marker)
-        } else {
-            runtime::release_turn_end(project_root, scope, agent, entry)
-        }
-    };
-    let prompted = match runtime::read_inbound(project_root, scope, agent) {
-        Some(inbound) => hooks_stop::continuation(project_root, scope, agent)
-            .and_then(|prompt| harness.post_prompt(&inbound, &prompt))
-            .map(|()| true),
-        None => type_prompt(project_root, scope, agent, harness, &pane.id, tmux_server),
-    };
-    match prompted {
-        Ok(true) => Ok(Some(waiting)),
-        Ok(false) => release().map(|()| None),
+    let posted = hooks_stop::continuation(project_root, scope, agent)
+        .and_then(|prompt| harness.post_prompt(&inbound, &prompt));
+    match posted {
+        Ok(()) => Ok(Some(waiting)),
         Err(e) => {
-            let _ = release();
+            let _ = if let Some(marker) = &marker {
+                runtime::write_waiting(project_root, scope, agent, marker)
+            } else {
+                runtime::release_turn_end(project_root, scope, agent, entry)
+            };
             Err(e)
         }
     }
-}
-
-/// Type the agent's messages prompt into `pane` if it is not in use and its
-/// input line is empty. Returns whether it typed.
-fn type_prompt(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    harness: Harness,
-    pane: &str,
-    tmux_server: Option<&str>,
-) -> Result<bool> {
-    if tmux::panes::in_use(tmux_server, pane)? {
-        return Ok(false);
-    }
-    let home = paths::home_dir()?;
-    let config_dir = runtime::read_session_path(project_root, scope, agent, SessionPath::ConfigDir);
-    let screen = tmux::capture_screen(tmux_server, pane)?;
-    if harness.input_is_empty(&screen, &home, config_dir.as_deref()) != Some(true) {
-        return Ok(false);
-    }
-    let prompt = hooks_stop::continuation(project_root, scope, agent)?;
-    tmux::send_text(tmux_server, pane, &prompt)?;
-    Ok(true)
 }
 
 #[cfg(test)]
@@ -136,7 +105,8 @@ mod tests {
     use super::*;
     use crate::commands::agent_send::tests::agent_send;
     use crate::commands::running_agents::waiting;
-    use crate::testing::{ControlClient, TestServer};
+    use crate::harness::Harness;
+    use crate::testing::{FakeSocket, TestServer};
     use chrono::Utc;
     use tempfile::tempdir;
 
@@ -182,36 +152,6 @@ mod tests {
         .status
     }
 
-    fn screen(server: &TestServer, target: &str) -> String {
-        tmux::capture_pane(server.name(), target).unwrap()
-    }
-
-    #[test]
-    fn an_unarmed_agent_at_an_empty_prompt_is_typed_its_messages_prompt() {
-        let server = TestServer::own("rearm-unarmed");
-        let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
-        let users = server.split_before(&target);
-        let session = server.tmux_stdout(&["display-message", "-p", "-t", &target, "#S"]);
-        let _viewing_the_users_pane = ControlClient::attach(server.name(), &session);
-
-        let status = send(&server, &project);
-
-        assert!(
-            status.ends_with(
-                "\n'implementer' was unarmed (Stop hook ended): re-armed, it reads this now"
-            ),
-            "{status}"
-        );
-        assert_eq!(
-            runtime::read_waiting(&project, "login", "implementer"),
-            None
-        );
-        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
-        let users = server.tmux_stdout(&["capture-pane", "-p", "-t", &users]);
-        assert!(!users.contains("[pm message]"), "{users}");
-    }
-
     /// Record `socket` as the agent's session's inbound channel.
     fn listening(project: &Path, socket: &Path) {
         let inbound = runtime::Inbound {
@@ -222,24 +162,15 @@ mod tests {
         runtime::write_inbound(project, "login", "implementer", Some(&inbound)).unwrap();
     }
 
-    #[test]
-    fn an_unarmed_agent_with_a_socket_is_posted_its_prompt_whatever_its_pane_shows() {
-        let server = TestServer::own("rearm-socket");
-        let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
-        let socket = crate::testing::FakeSocket::bind(dir.path());
-        listening(&project, &socket.path);
-        let pane = server.pane_id(&target);
-        server.tmux_stdout(&["copy-mode", "-t", &pane]);
+    /// A socket recorded as the agent's session's inbound channel.
+    fn posting(dir: &Path, project: &Path) -> FakeSocket {
+        let socket = FakeSocket::bind(dir);
+        listening(project, &socket.path);
+        socket
+    }
 
-        let status = send(&server, &project);
-
-        assert!(
-            status.ends_with(
-                "\n'implementer' was unarmed (Stop hook ended): re-armed, it reads this now"
-            ),
-            "{status}"
-        );
+    /// Assert the next post to `socket` is the agent's messages prompt.
+    fn assert_posted_prompt(socket: &FakeSocket) {
         let prompt = serde_json::json!({
             "type": "user",
             "message": {"role": "user", "content": PROMPT},
@@ -251,12 +182,31 @@ mod tests {
                 serde_json::json!({"type": "auth", "token": "t0k"})
             )
         );
+    }
+
+    #[test]
+    fn an_unarmed_agent_with_a_socket_is_posted_its_prompt_whatever_its_pane_shows() {
+        let server = TestServer::own("rearm-socket");
+        let dir = tempdir().unwrap();
+        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
+        let socket = posting(dir.path(), &project);
+        let pane = server.pane_id(&target);
+        server.tmux_stdout(&["copy-mode", "-t", &pane]);
+
+        let status = send(&server, &project);
+
+        assert!(
+            status.ends_with(
+                "\n'implementer' was unarmed (Stop hook ended): re-armed, it reads this now"
+            ),
+            "{status}"
+        );
+        assert_posted_prompt(&socket);
         assert_eq!(
             runtime::read_waiting(&project, "login", "implementer"),
             None
         );
         assert!(tmux::paste::in_mode(server.name(), &pane).unwrap());
-        assert!(!screen(&server, &target).contains("[pm message]"));
     }
 
     /// A codex agent at its composer with `marker`, its session's thread
@@ -404,8 +354,7 @@ mod tests {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
         let (project, _) = at_prompt(&server, dir.path(), WaitingKind::Permission);
-        let socket = crate::testing::FakeSocket::bind(dir.path());
-        listening(&project, &socket.path);
+        let socket = posting(dir.path(), &project);
 
         left_alone(&send(&server, &project));
         assert!(!socket.posted());
@@ -415,7 +364,7 @@ mod tests {
     fn a_socket_nothing_listens_on_leaves_the_agent_unarmed_and_says_so() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
+        let (project, _) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
         listening(&project, &dir.path().join("gone.sock"));
 
         let err = rearm(&project, "login", "implementer", server.name()).unwrap_err();
@@ -425,55 +374,50 @@ mod tests {
             runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
             Some(WaitingKind::HookEnded)
         );
-        assert!(!screen(&server, &target).contains("[pm message]"));
     }
 
-    /// Send the agent a message and check it is left alone, still unarmed.
-    fn assert_left_alone(server: &TestServer, project: &Path) {
-        let status = send(server, project);
+    #[test]
+    fn a_session_that_reported_no_channel_is_left_unarmed_and_untyped_with_a_warning() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (project, name) = server.setup_project_with_feature(dir.path(), "login");
+        let (_, received) = server.spawn_recording_agent(
+            &project,
+            &tmux::session_name(&name, "login"),
+            "login",
+            "implementer",
+            Harness::ClaudeCode,
+        );
+        let waiting = Waiting::now(WaitingKind::HookEnded, None);
+        runtime::write_waiting(&project, "login", "implementer", &waiting).unwrap();
 
-        left_alone(&status);
+        let sent = agent_send(
+            &project,
+            "login",
+            None,
+            "implementer",
+            "reviewer",
+            "hi",
+            server.name(),
+        )
+        .unwrap();
+
+        left_alone(&sent.status);
         assert_eq!(
-            runtime::read_waiting(project, "login", "implementer").map(|w| w.kind),
+            sent.warnings,
+            [format!(
+                "message 001 is queued for 'implementer@login', but it could not be re-armed: \
+                 its session reported no wake channel, so nothing wakes it to read this until \
+                 it is prompted or restarted (`pm agent restart implementer --scope login \
+                 --project {name}` starts a session that may report one)"
+            )]
+        );
+        assert_eq!(
+            runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
             Some(WaitingKind::HookEnded)
         );
-    }
-
-    fn a_pane_in_a_mode_is_left_in_it_untyped(enter: &str) {
-        let server = TestServer::own(&format!("rearm-{enter}"));
-        let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
-        let pane = server.pane_id(&target);
-        server.tmux_stdout(&[enter, "-t", &pane]);
-        server.split_before(&target);
-        let session = server.tmux_stdout(&["display-message", "-p", "-t", &target, "#S"]);
-        let _viewing_another_pane = ControlClient::attach(server.name(), &session);
-
-        assert_left_alone(&server, &project);
-
-        assert!(tmux::paste::in_mode(server.name(), &pane).unwrap());
-    }
-
-    #[test]
-    fn a_pane_in_copy_mode_is_left_in_it_untyped() {
-        a_pane_in_a_mode_is_left_in_it_untyped("copy-mode");
-    }
-
-    #[test]
-    fn a_pane_in_tree_mode_is_left_in_it_untyped() {
-        a_pane_in_a_mode_is_left_in_it_untyped("choose-tree");
-    }
-
-    #[test]
-    fn a_pane_a_client_is_viewing_is_left_untyped() {
-        let server = TestServer::own("rearm-viewed");
-        let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::HookEnded);
-        server.tmux_stdout(&["select-window", "-t", &target]);
-        let session = server.tmux_stdout(&["display-message", "-p", "-t", &target, "#S"]);
-        let _viewing = ControlClient::attach(server.name(), &session);
-
-        assert_left_alone(&server, &project);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert_eq!(std::fs::read(&received).unwrap_or_default(), b"");
     }
 
     /// An agent at its prompt with no marker, whose session started past
@@ -501,21 +445,23 @@ mod tests {
     fn an_agent_active_since_its_start_is_busy_and_left_alone() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, target) = started_long_ago(&server, dir.path(), chrono::Duration::seconds(1));
+        let (project, _) = started_long_ago(&server, dir.path(), chrono::Duration::seconds(1));
+        let socket = posting(dir.path(), &project);
 
         let state = left_alone(&send(&server, &project));
         assert_eq!(
             state,
             "'implementer' is busy: it reads this when its turn ends"
         );
-        assert!(!screen(&server, &target).contains(PROMPT));
+        assert!(!socket.posted());
     }
 
     #[test]
     fn an_agent_whose_start_armed_no_waiter_is_re_armed_once() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, target) = started_long_ago(&server, dir.path(), chrono::Duration::zero());
+        let (project, _) = started_long_ago(&server, dir.path(), chrono::Duration::zero());
+        let socket = posting(dir.path(), &project);
 
         let status = send(&server, &project);
 
@@ -523,7 +469,7 @@ mod tests {
             status.ends_with("\n'implementer' was unarmed (its session started, but armed no waiter): re-armed, it reads this now"),
             "{status}"
         );
-        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
+        assert_posted_prompt(&socket);
         assert_eq!(
             send(&server, &project),
             "Message 002 sent to 'implementer' (from 'reviewer')\n'implementer' is busy: it \
@@ -535,7 +481,8 @@ mod tests {
     fn an_agent_marked_background_with_no_waiter_is_re_armed() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Background);
+        let (project, _) = at_prompt(&server, dir.path(), WaitingKind::Background);
+        let socket = posting(dir.path(), &project);
 
         let status = send(&server, &project);
 
@@ -547,14 +494,15 @@ mod tests {
             runtime::read_waiting(&project, "login", "implementer"),
             None
         );
-        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
+        assert_posted_prompt(&socket);
     }
 
     #[test]
     fn an_agent_asking_the_user_is_left_alone() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Permission);
+        let (project, _) = at_prompt(&server, dir.path(), WaitingKind::Permission);
+        let socket = posting(dir.path(), &project);
 
         let status = send(&server, &project);
 
@@ -563,14 +511,15 @@ mod tests {
             "'implementer' is asking the user (permission prompt): it reads this once that is \
              answered"
         );
-        assert!(!screen(&server, &target).contains("[pm message]"));
+        assert!(!socket.posted());
     }
 
     #[test]
     fn a_loop_that_stopped_itself_is_left_alone() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Tripped);
+        let (project, _) = at_prompt(&server, dir.path(), WaitingKind::Tripped);
+        let socket = posting(dir.path(), &project);
 
         let status = send(&server, &project);
 
@@ -579,42 +528,15 @@ mod tests {
             "'implementer' is unarmed (never-idle loop stopped): nothing wakes it to read this \
              until it is prompted"
         );
-        assert!(!screen(&server, &target).contains("[pm message]"));
-    }
-
-    #[test]
-    fn a_draft_in_the_input_line_is_left_untouched() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Prompt);
-        let mut tmux = std::process::Command::new("tmux");
-        if let Some(name) = server.name() {
-            tmux.args(["-L", name]);
-        }
-        let typed = tmux
-            .args(["send-keys", "-t", &target, "-l", "half a thought"])
-            .status()
-            .unwrap();
-        assert!(typed.success());
-        server.wait_for_pane_text(&target, "❯ half a thought");
-
-        let status = send(&server, &project);
-
-        left_alone(&status);
-        let screen = screen(&server, &target);
-        assert!(screen.contains("❯ half a thought"), "{screen}");
-        assert!(!screen.contains("[pm message]"), "{screen}");
-        assert_eq!(
-            runtime::read_waiting(&project, "login", "implementer").map(|w| w.kind),
-            Some(WaitingKind::Prompt)
-        );
+        assert!(!socket.posted());
     }
 
     #[test]
     fn an_agent_interrupted_without_a_hook_is_re_armed_from_its_transcript() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Permission);
+        let (project, _) = at_prompt(&server, dir.path(), WaitingKind::Permission);
+        let socket = posting(dir.path(), &project);
         let transcript = dir.path().join("session.jsonl");
         let interrupt = serde_json::json!({
             "type": "user",
@@ -650,7 +572,7 @@ mod tests {
             None,
             "a re-armed interrupt no longer counts"
         );
-        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
+        assert_posted_prompt(&socket);
 
         let bookkeeping = serde_json::json!({"type": "system", "uuid": "5b0c7e1a-later"});
         let mut file = std::fs::File::options()
@@ -671,7 +593,8 @@ mod tests {
     fn an_agent_whose_dialog_closed_between_turns_without_its_waiter_is_re_armed() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, target) = at_prompt(&server, dir.path(), WaitingKind::Dialog);
+        let (project, _) = at_prompt(&server, dir.path(), WaitingKind::Dialog);
+        let socket = posting(dir.path(), &project);
         let mut dialog = runtime::read_waiting(&project, "login", "implementer").unwrap();
         dialog.since -= chrono::Duration::minutes(1);
         dialog.between_turns = true;
@@ -702,38 +625,6 @@ mod tests {
             runtime::read_waiting(&project, "login", "implementer"),
             None
         );
-        server.wait_for_pane_text(&target, &format!("❯ {PROMPT}"));
-    }
-
-    #[test]
-    fn a_box_in_vim_normal_mode_is_pressed_no_key() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let (project, name) = server.setup_project_with_feature(dir.path(), "login");
-        let (_, received) = server.spawn_recording_agent(
-            &project,
-            &tmux::session_name(&name, "login"),
-            "login",
-            "implementer",
-            Harness::ClaudeCode,
-        );
-        let waiting = Waiting::now(WaitingKind::HookEnded, None);
-        runtime::write_waiting(&project, "login", "implementer", &waiting).unwrap();
-        let config_dir = dir.path().join("claude-config");
-        std::fs::create_dir_all(&config_dir).unwrap();
-        std::fs::write(config_dir.join(".claude.json"), r#"{"editorMode":"vim"}"#).unwrap();
-        runtime::write_session_path(
-            &project,
-            "login",
-            "implementer",
-            runtime::SessionPath::ConfigDir,
-            Some(&config_dir),
-        )
-        .unwrap();
-
-        assert_left_alone(&server, &project);
-
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        assert_eq!(std::fs::read(&received).unwrap_or_default(), b"");
+        assert_posted_prompt(&socket);
     }
 }
