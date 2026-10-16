@@ -13,7 +13,7 @@ use crate::tmux;
 
 use super::launch::{definition_flag, effective_definition, resolve_launch};
 
-/// The shell line sent to the window: for an agent, its launch stamp
+/// The shell line sent to the window: for an agent, its launched stamp
 /// ([`runtime::launched_at`]) created, then its identity — its worktree
 /// ([`paths::AGENT_WORKTREE_ENV`]) and `PM_AGENT_NAME` (so `pm msg` calls
 /// auto-identify) — exported ahead of the harness command.

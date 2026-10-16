@@ -9,34 +9,14 @@
 //! spawn replaces it. An exited harness says more, so a stale marker never
 //! hides it.
 //!
-//! The **waiter** file names the process of pm's Stop hook that waits on
-//! the agent's inbox: each one takes it over as it starts, so the newest
-//! wins and an older one, finding another named, ends. Idle needs it alive
-//! ([`running_agents`](crate::commands::running_agents)): a marker whose
-//! waiter is gone leaves the agent at its prompt with nothing to wake it.
-//!
-//! The **breaker** counts the waiter's wakes in a row that found the inbox
-//! unread since the last one; once it trips, the **stopped-loop** file
-//! says why, and no waiter wakes the agent again until a spawn forgets both.
-//!
-//! The **Stop hook log** records each Stop hook's path and why it took it
-//! — the payload's background work included — for diagnosing an agent
-//! left waiting. Best-effort, and capped.
+//! The **waiter** file, the **breaker**, the **stopped-loop** file and the
+//! **Stop hook log** are the waiter's own ([`waiter`]).
 //!
 //! The **activity stamp** is a file whose mtime is the agent's last sign of
 //! life: every pm hook invocation touches it.
 //!
-//! The **launch stamp** is a file the line a spawn types into the agent's
-//! window creates before it starts the harness, so its existence says the
-//! window's shell got through its startup files and ran the line, and its
-//! mtime says when. Every spawn removes it before typing the line.
-//!
-//! The **start stamp** is a file the harness's session start writes
-//! ([`hooks_session_start`](crate::commands::hooks_session_start)), every
-//! harness's, a resume's included but not a compaction's, so its existence says the harness got
-//! through its own startup and is up, and its mtime says when; the launch
-//! check reads it ([`launch_check`](crate::commands::launch_check)). Every
-//! spawn removes it with the launch stamp.
+//! The **launched stamp**, the **start stamp** and the **launch stamp**,
+//! what the last spawn launched with, are the spawn's ([`launch`]).
 //!
 //! The **end stamp** ([`mark_ended`]) names the harness process whose
 //! session ended, and the **denial record** ([`Denial`]) a tool call the
@@ -50,17 +30,13 @@
 //! read ([`Harness::config_dir_env`](crate::harness::Harness::config_dir_env)).
 //! Every spawn forgets them until the new session starts, as it does the
 //! **inbound channel** ([`Inbound`]). A turn's end read
-//! from the transcript has no marker to remove, so the one who acts on it
-//! claims it with a stamp instead, after which it no longer counts.
+//! from the transcript is claimed instead of cleared ([`turn_end`]).
 //!
 //! The **dialog record** is a dialog that can be answered remotely
 //! ([`DialogRecord`]).
 //!
 //! The **latest reply** caches the agent's last reply for the status views
 //! ([`LatestRecord`]).
-//!
-//! The **launch stamp** is what the agent's last spawn launched with
-//! ([`launch_stamp`](crate::commands::launch_stamp)).
 //!
 //! The **restart-at-idle** file marks a stale agent a restart sweep passed
 //! over as busy, for its waiter to restart at its next idle
@@ -100,22 +76,16 @@ pub use dialog::*;
 pub use ended::*;
 pub use inbound::*;
 pub use latest::*;
+pub mod launch;
+pub use launch::*;
+pub mod turn_end;
+pub use turn_end::*;
+pub mod waiter;
+pub use waiter::*;
 
 const WAITING_FILE: &str = "waiting.json";
 const ACTIVITY_FILE: &str = "activity";
-const LAUNCHED_FILE: &str = "launched";
-const STARTED_FILE: &str = "started";
-const LAUNCH_PROMPT_FILE: &str = "launch-prompt";
-const TURN_END_CLAIM: &str = "turn-end-claimed-";
-const WAITER_FILE: &str = "waiter";
-const BREAKER_FILE: &str = "breaker.json";
-const TRIPPED_FILE: &str = "loop-tripped";
-const STOP_LOG: &str = "stop-hook.log";
-const LAUNCH_STAMP_FILE: &str = "launch-stamp";
 const RESTART_AT_IDLE_FILE: &str = "restart-at-idle";
-const WOKEN_THROUGH_FILE: &str = "woken-through";
-/// The size past which the Stop hook's log keeps only its newer half.
-const STOP_LOG_MAX: u64 = 64 * 1024;
 
 fn root(project_root: &Path) -> PathBuf {
     paths::pm_dir(project_root).join("runtime")
@@ -295,46 +265,6 @@ pub fn clear_waiting(project_root: &Path, scope: &str, agent: &str) -> Result<bo
     }
 }
 
-/// Name `pid` as the agent's waiter, replacing whichever was;
-/// `background` is when it began waiting on background work as well as the
-/// inbox, if it does.
-pub fn take_waiter(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    pid: u32,
-    background: Option<DateTime<Utc>>,
-) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(WAITER_FILE);
-    let text = match background {
-        Some(since) => format!("{pid} {}", since.to_rfc3339()),
-        None => pid.to_string(),
-    };
-    write_atomic(&file, text.as_bytes())
-}
-
-fn waiter_file(project_root: &Path, scope: &str, agent: &str) -> Option<String> {
-    std::fs::read_to_string(agent_file(project_root, scope, agent, WAITER_FILE)).ok()
-}
-
-/// The pid of the agent's waiter; `None` when none was named.
-pub fn read_waiter(project_root: &Path, scope: &str, agent: &str) -> Option<u32> {
-    waiter_file(project_root, scope, agent)?
-        .split_whitespace()
-        .next()?
-        .parse()
-        .ok()
-}
-
-/// When the agent's waiter began waiting on background work, if it does.
-pub fn waiter_background(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
-    let text = waiter_file(project_root, scope, agent)?;
-    let since = text.split_whitespace().nth(1)?;
-    DateTime::parse_from_rfc3339(since)
-        .ok()
-        .map(|t| t.with_timezone(&Utc))
-}
-
 /// Remove the agent's marker if it is of `kind`, leaving any other a hook
 /// wrote since. Returns whether it removed one.
 pub fn clear_waiting_if(
@@ -366,90 +296,6 @@ pub fn replace_waiting_if(
     Ok(true)
 }
 
-/// Record `detail`, what the dialog the waiter woke the agent through
-/// says, for the next waiter: the woken turn's prompt clears the marker.
-pub fn write_woken_through(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    detail: &str,
-) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(WOKEN_THROUGH_FILE);
-    write_atomic(&file, detail.as_bytes())
-}
-
-/// Take what [`write_woken_through`] recorded, if anything, removing it.
-pub fn take_woken_through(project_root: &Path, scope: &str, agent: &str) -> Option<String> {
-    let file = agent_file(project_root, scope, agent, WOKEN_THROUGH_FILE);
-    let detail = std::fs::read_to_string(&file).ok();
-    let _ = std::fs::remove_file(&file);
-    detail
-}
-
-/// What the waiter's breaker knew at its last wake.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Breaker {
-    /// Wakes in a row that read nothing since the one before.
-    pub wasted: u32,
-    /// How many of its messages the agent had read at the last wake.
-    pub read: u32,
-}
-
-pub fn read_breaker(project_root: &Path, scope: &str, agent: &str) -> Option<Breaker> {
-    let text =
-        std::fs::read_to_string(agent_file(project_root, scope, agent, BREAKER_FILE)).ok()?;
-    serde_json::from_str(&text).ok()
-}
-
-pub fn write_breaker(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    breaker: &Breaker,
-) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(BREAKER_FILE);
-    write_atomic(&file, serde_json::to_string(breaker)?.as_bytes())
-}
-
-/// Record that the agent's never-idle loop stopped itself, and why.
-pub fn trip_loop(project_root: &Path, scope: &str, agent: &str, reason: &str) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(TRIPPED_FILE);
-    write_atomic(&file, reason.as_bytes())
-}
-
-/// Why the agent's never-idle loop stopped itself, if it did.
-pub fn loop_tripped(project_root: &Path, scope: &str, agent: &str) -> Option<String> {
-    let text =
-        std::fs::read_to_string(agent_file(project_root, scope, agent, TRIPPED_FILE)).ok()?;
-    Some(text.trim().to_string())
-}
-
-/// Forget the breaker and a stopped loop, for a new session.
-pub fn reset_loop(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
-    for name in [BREAKER_FILE, TRIPPED_FILE] {
-        match std::fs::remove_file(agent_file(project_root, scope, agent, name)) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e.into()),
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-pub fn write_launch_stamp(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    stamp: &str,
-) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(LAUNCH_STAMP_FILE);
-    write_atomic(&file, stamp.as_bytes())
-}
-
-/// The agent's launch stamp; `None` when its spawn wrote none.
-pub fn read_launch_stamp(project_root: &Path, scope: &str, agent: &str) -> Option<String> {
-    std::fs::read_to_string(agent_file(project_root, scope, agent, LAUNCH_STAMP_FILE)).ok()
-}
-
 /// Mark the agent for a restart at its next idle.
 pub fn mark_restart_at_idle(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
     let file = agent_dir(project_root, scope, agent)?.join(RESTART_AT_IDLE_FILE);
@@ -474,40 +320,6 @@ pub fn clear_restart_at_idle(project_root: &Path, scope: &str, agent: &str) -> R
 pub fn registered(project_root: &Path, scope: &str, agent: &str) -> bool {
     crate::state::agent::AgentRegistry::load(&paths::agents_dir(project_root), scope)
         .is_ok_and(|registry| registry.get(agent).is_some())
-}
-
-/// Append `line` to the agent's Stop hook log, stamped with the time and
-/// this process's pid. Best-effort: a log that can't be written is skipped,
-/// as is one for an agent no longer [registered].
-pub fn log_stop_hook(project_root: &Path, scope: &str, agent: &str, line: &str) {
-    if !registered(project_root, scope, agent) {
-        return;
-    }
-    let Ok(dir) = agent_dir(project_root, scope, agent) else {
-        return;
-    };
-    let file = dir.join(STOP_LOG);
-    if std::fs::metadata(&file).is_ok_and(|m| m.len() > STOP_LOG_MAX)
-        && let Ok(text) = std::fs::read_to_string(&file)
-    {
-        let bytes = text.as_bytes();
-        let half = bytes.len() / 2;
-        let start = bytes[half..]
-            .iter()
-            .position(|&b| b == b'\n')
-            .map_or(bytes.len(), |i| half + i + 1);
-        let _ = write_atomic(&file, &bytes[start..]);
-    }
-    let line = format!(
-        "{} [{}] {line}\n",
-        Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
-        std::process::id()
-    );
-    let _ = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&file)
-        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
 }
 
 /// A path the agent's current session reported at its start.
@@ -559,69 +371,6 @@ pub fn read_session_path(
     Some(PathBuf::from(text))
 }
 
-/// The file whose existence says the turn end recorded by transcript entry
-/// `entry` was claimed.
-fn turn_end_claim(project_root: &Path, scope: &str, agent: &str, entry: &str) -> PathBuf {
-    let name: String = entry
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    agent_file(
-        project_root,
-        scope,
-        agent,
-        &format!("{TURN_END_CLAIM}{name}"),
-    )
-}
-
-/// Claim the turn end transcript entry `entry` records, one no hook
-/// reported, for one caller only: true for the caller that claimed it.
-/// Earlier claims are dropped. Keyed on the entry, not the transcript's
-/// mtime, so bookkeeping written after it leaves the claim standing.
-pub fn claim_turn_end(project_root: &Path, scope: &str, agent: &str, entry: &str) -> Result<bool> {
-    let dir = agent_dir(project_root, scope, agent)?;
-    let file = turn_end_claim(project_root, scope, agent, entry);
-    match std::fs::File::options()
-        .write(true)
-        .create_new(true)
-        .open(&file)
-    {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(false),
-        Err(e) => return Err(e.into()),
-    }
-    for dirent in std::fs::read_dir(dir)?.flatten() {
-        let path = dirent.path();
-        let stale = dirent
-            .file_name()
-            .to_string_lossy()
-            .starts_with(TURN_END_CLAIM);
-        if stale && path != file {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-    Ok(true)
-}
-
-/// Give up a claim [`claim_turn_end`] made.
-pub fn release_turn_end(project_root: &Path, scope: &str, agent: &str, entry: &str) -> Result<()> {
-    match std::fs::remove_file(turn_end_claim(project_root, scope, agent, entry)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-        _ => Ok(()),
-    }
-}
-
-/// Whether the turn end transcript entry `entry` records has been claimed.
-pub fn turn_end_claimed(project_root: &Path, scope: &str, agent: &str, entry: &str) -> bool {
-    turn_end_claim(project_root, scope, agent, entry).exists()
-}
-
 /// Stamp the agent as active now.
 pub fn touch_activity(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
     let file = agent_dir(project_root, scope, agent)?.join(ACTIVITY_FILE);
@@ -648,80 +397,6 @@ pub(crate) fn set_activity(project_root: &Path, scope: &str, agent: &str, when: 
 /// When the agent was last stamped active; `None` if it never was.
 pub fn last_activity(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
     let file = agent_file(project_root, scope, agent, ACTIVITY_FILE);
-    Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
-}
-
-/// The launch stamp's path, its directory created and the stamp removed:
-/// what a spawn's typed line creates.
-pub fn reset_launched(project_root: &Path, scope: &str, agent: &str) -> Result<PathBuf> {
-    let file = agent_dir(project_root, scope, agent)?.join(LAUNCHED_FILE);
-    match std::fs::remove_file(&file) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-        _ => Ok(file),
-    }
-}
-
-/// Where the agent's launch stamp is, whether or not it exists.
-pub fn launched_file(project_root: &Path, scope: &str, agent: &str) -> PathBuf {
-    agent_file(project_root, scope, agent, LAUNCHED_FILE)
-}
-
-/// When the agent's window ran its spawn's typed line; `None` until it has.
-pub fn launched_at(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
-    let file = agent_file(project_root, scope, agent, LAUNCHED_FILE);
-    Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
-}
-
-/// Record whether the agent's spawn launches it with a prompt, whose turn's
-/// end starts its waiter, so its session's start need not
-/// ([`take_launch_prompt`]).
-pub fn set_launch_prompt(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    prompted: bool,
-) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(LAUNCH_PROMPT_FILE);
-    if prompted {
-        std::fs::write(file, "")?;
-    } else if let Err(e) = std::fs::remove_file(file)
-        && e.kind() != std::io::ErrorKind::NotFound
-    {
-        return Err(e.into());
-    }
-    Ok(())
-}
-
-/// Whether the session starting now was launched with a prompt
-/// ([`set_launch_prompt`]), forgetting it: a later start in the same
-/// session, a `/clear`, had none.
-pub fn take_launch_prompt(project_root: &Path, scope: &str, agent: &str) -> bool {
-    std::fs::remove_file(agent_file(project_root, scope, agent, LAUNCH_PROMPT_FILE)).is_ok()
-}
-
-/// Stamp the agent's harness session as started now.
-pub fn mark_started(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
-    let file = agent_dir(project_root, scope, agent)?.join(STARTED_FILE);
-    std::fs::File::options()
-        .create(true)
-        .append(true)
-        .open(file)?
-        .set_modified(std::time::SystemTime::now())?;
-    Ok(())
-}
-
-/// Remove the start stamp, as a spawn does before it launches.
-pub fn reset_started(project_root: &Path, scope: &str, agent: &str) -> Result<()> {
-    match std::fs::remove_file(agent_file(project_root, scope, agent, STARTED_FILE)) {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.into()),
-        _ => Ok(()),
-    }
-}
-
-/// When the agent's harness session last started since its spawn; `None`
-/// until it has.
-pub fn started_at(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
-    let file = agent_file(project_root, scope, agent, STARTED_FILE);
     Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
 }
 
@@ -828,22 +503,5 @@ mod tests {
         assert!(Utc::now() - reviewer > chrono::Duration::minutes(59));
         assert!(Utc::now() - implementer < chrono::Duration::minutes(1));
         assert_eq!(scope_last_activity(root, "login"), Some(implementer));
-    }
-
-    #[test]
-    fn a_turn_end_is_claimed_once_until_given_back() {
-        let dir = tempdir().unwrap();
-        let root = dir.path();
-        let first = "6f1c2a8e-0001";
-        let later = "6f1c2a8e-0002";
-
-        assert!(claim_turn_end(root, "login", "qa", first).unwrap());
-        assert!(!claim_turn_end(root, "login", "qa", first).unwrap());
-        assert!(turn_end_claimed(root, "login", "qa", first));
-
-        assert!(claim_turn_end(root, "login", "qa", later).unwrap());
-        release_turn_end(root, "login", "qa", later).unwrap();
-        assert!(!turn_end_claimed(root, "login", "qa", later));
-        assert!(claim_turn_end(root, "login", "qa", later).unwrap());
     }
 }

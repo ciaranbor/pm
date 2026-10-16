@@ -144,7 +144,7 @@ pub(super) fn agent_issues(
 }
 
 /// Whether `agent`'s harness session reported starting since its launch.
-/// An agent with no launch stamp was launched by a pm that wrote no start
+/// An agent with no launched stamp was launched by a pm that wrote no start
 /// stamp either, so it counts as started.
 fn session_started(project_root: &Path, scope: &str, agent: &str) -> bool {
     runtime::started_at(project_root, scope, agent).is_some()
