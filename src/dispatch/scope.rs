@@ -48,8 +48,13 @@ pub(super) fn resolve_scope_with_flag(
 pub(super) fn project_root(projects_dir: &Path, project: Option<&str>) -> Result<PathBuf> {
     match project {
         Some(name) => Ok(ProjectEntry::load_here(projects_dir, name)?.1),
-        None => paths::find_project_root(&std::env::current_dir()?),
+        None => cwd_project_root(),
     }
+}
+
+/// The root of the project the cwd is in.
+pub(super) fn cwd_project_root() -> Result<PathBuf> {
+    paths::find_project_root(&std::env::current_dir()?)
 }
 
 /// The scope of the agent this process runs for, if that agent is of the
@@ -73,7 +78,7 @@ pub(super) fn optional_agent_scope() -> Result<Option<(PathBuf, String)>> {
 /// project — used by commands that also work outside one. Only that case is
 /// swallowed; a genuine I/O failure still propagates.
 pub(super) fn optional_project_root() -> Result<Option<PathBuf>> {
-    match paths::find_project_root(&std::env::current_dir()?) {
+    match cwd_project_root() {
         Ok(root) => Ok(Some(root)),
         Err(PmError::NotInProject) => Ok(None),
         Err(e) => Err(e),

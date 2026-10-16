@@ -9,7 +9,7 @@ use pm::state::scope;
 use pm::tmux;
 
 use super::report::{plural, report_main_spawn};
-use super::scope::project_root;
+use super::scope::{cwd_project_root, project_root};
 use super::window::{connect, finish_in_own_session, push};
 
 pub(super) fn init(
@@ -105,7 +105,7 @@ pub(super) fn open_all(server: Option<&str>) -> Result<()> {
     if changed {
         push();
     }
-    let current = paths::find_project_root(&std::env::current_dir()?)
+    let current = cwd_project_root()
         .and_then(|root| pm::state::project::ProjectConfig::load(&paths::pm_dir(&root)));
     if let Ok(config) = current {
         let main_session = tmux::session_name(&config.project.name, scope::MAIN);
@@ -197,7 +197,7 @@ pub(super) fn delete(
     let deleted = match project.as_deref() {
         Some(name) => commands::delete::delete_named(&projects_dir, name, force, server, confirm)?,
         None => {
-            let root = paths::find_project_root(&std::env::current_dir()?)?;
+            let root = cwd_project_root()?;
             commands::delete::delete(&root, &projects_dir, force, server, confirm)?
         }
     };

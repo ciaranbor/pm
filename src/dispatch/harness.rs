@@ -9,7 +9,9 @@ use pm::harness::Harness;
 use pm::state::paths;
 use pm::state::project::GlobalConfig;
 
-use super::scope::{optional_project_root, resolve_feature_name, resolve_scope_with_flag};
+use super::scope::{
+    cwd_project_root, optional_project_root, resolve_feature_name, resolve_scope_with_flag,
+};
 use super::window::{
     agent_window, publish, push, restart_at_idle, running_agent, tmux_server_from_env,
 };
@@ -19,7 +21,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
     match cmd {
         HarnessCommands::Settings { harness, command } => {
             commands::harness_settings::settings_files(harness)?;
-            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            let project_root = cwd_project_root()?;
             match command {
                 HarnessSettingsCommands::List { name } => {
                     let scope = resolve_scope_with_flag(&project_root, name)?;
@@ -130,7 +132,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
                 &mut waiter_turns(),
             )),
             HarnessHooksCommands::RestartAtIdle { agent, scope } => {
-                let root = paths::find_project_root(&std::env::current_dir()?)?;
+                let root = cwd_project_root()?;
                 commands::restart_at_idle::run(
                     &root,
                     &scope,
@@ -230,7 +232,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
             std::process::exit(code)
         }
         HarnessCommands::Pull { name, dry_run } => {
-            let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+            let project_root = cwd_project_root()?;
             let name = resolve_feature_name(name, &project_root)?;
             let pulled = commands::seed::pull(&project_root, &name, dry_run)?;
             if pulled.written.is_empty() && pulled.removed.is_empty() {
@@ -280,11 +282,7 @@ pub(super) fn run(cmd: HarnessCommands) -> Result<()> {
             output,
             harness,
         } => {
-            let project_root = if all {
-                None
-            } else {
-                Some(paths::find_project_root(&std::env::current_dir()?)?)
-            };
+            let project_root = if all { None } else { Some(cwd_project_root()?) };
             let (_, messages) = commands::harness_export::export(&ExportParams {
                 harness,
                 project_root: project_root.as_deref(),
