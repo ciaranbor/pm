@@ -6,7 +6,7 @@
 #[allow(dead_code)]
 mod fake_app_server;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -26,16 +26,12 @@ fn project(dir: &Path) {
     register(dir, Harness::ClaudeCode);
 }
 
-/// The blocking hook under `/bin/sh -c`, with the built `pm` first on
-/// `PATH`, for an agent spawned in the main worktree. Returns once the hook
-/// is about to wait.
-fn spawn_hook(dir: &Path) -> Child {
-    spawn_hook_in(dir, &dir.join("main"))
-}
-
-/// [`spawn_hook`], run in `cwd`, wherever the agent's shell has `cd`'d.
-fn spawn_hook_in(dir: &Path, cwd: &Path) -> Child {
-    let hook = start_in(dir, cwd, &stop_hook_command(Harness::OpenCode), "");
+/// The blocking hook opencode's plugin runs, in `cwd`, wherever the agent's
+/// shell has `cd`'d. Returns once the hook is about to wait.
+fn armed_hook(dir: &Path, cwd: &Path) -> Child {
+    let hook = Hook::new(dir, &stop_hook_command(Harness::OpenCode))
+        .cwd(cwd)
+        .start();
     // The stamp is touched after the signal handlers are installed.
     let start = Instant::now();
     while runtime::last_activity(dir, "main", AGENT).is_none() {
@@ -48,57 +44,81 @@ fn spawn_hook_in(dir: &Path, cwd: &Path) -> Child {
     hook
 }
 
-/// `command` under `/bin/sh -c`, as a harness runs a hook, with the built
-/// `pm` first on `PATH`, and an empty payload.
-fn start(dir: &Path, command: &str) -> Child {
-    start_with(dir, command, "")
+/// A hook command under `/bin/sh -c`, as a harness runs it, with the built
+/// `pm` first on `PATH`: for an agent spawned in the main worktree, run
+/// there, with an empty payload, unless set otherwise.
+struct Hook<'a> {
+    dir: &'a Path,
+    command: &'a str,
+    payload: &'a str,
+    worktree: PathBuf,
+    cwd: PathBuf,
 }
 
-/// [`start`] with `payload` on stdin.
-fn start_with(dir: &Path, command: &str, payload: &str) -> Child {
-    start_in(dir, &dir.join("main"), command, payload)
-}
-
-/// [`start_with`], run in `cwd`.
-fn start_in(dir: &Path, cwd: &Path, command: &str, payload: &str) -> Child {
-    start_for(dir, &dir.join("main"), cwd, command, payload)
-}
-
-/// [`start_in`] for an agent spawned in `worktree`.
-fn start_for(dir: &Path, worktree: &Path, cwd: &Path, command: &str, payload: &str) -> Child {
-    let bin = assert_cmd::cargo::cargo_bin("pm");
-    // `stubs` holds stand-ins for harness CLIs a test needs.
-    let path = format!(
-        "{}:{}:{}",
-        dir.join("stubs").display(),
-        bin.parent().unwrap().display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let mut hook = Command::new("/bin/sh");
-    for var in pm::state::dirs::XDG_VARS {
-        hook.env_remove(var);
+impl<'a> Hook<'a> {
+    fn new(dir: &'a Path, command: &'a str) -> Self {
+        Self {
+            dir,
+            command,
+            payload: "",
+            worktree: dir.join("main"),
+            cwd: dir.join("main"),
+        }
     }
-    let mut hook = hook
-        .args(["-c", command])
-        .env(
-            "PM_TMUX_SERVER",
-            format!("pm-test-{}-stop-none", std::process::id()),
-        )
-        .env_remove("TMUX")
-        .env_remove("TMUX_PANE")
-        .env("HOME", dir)
-        .env("PATH", path)
-        .env("PM_AGENT_NAME", AGENT)
-        .env(paths::AGENT_WORKTREE_ENV, worktree)
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = hook.stdin.take().unwrap();
-    std::io::Write::write_all(&mut stdin, payload.as_bytes()).unwrap();
-    hook
+
+    fn payload(self, payload: &'a str) -> Self {
+        Self { payload, ..self }
+    }
+
+    fn cwd(self, cwd: &Path) -> Self {
+        Self {
+            cwd: cwd.to_path_buf(),
+            ..self
+        }
+    }
+
+    fn worktree(self, worktree: &Path) -> Self {
+        Self {
+            worktree: worktree.to_path_buf(),
+            ..self
+        }
+    }
+
+    fn start(self) -> Child {
+        let bin = assert_cmd::cargo::cargo_bin("pm");
+        // `stubs` holds stand-ins for harness CLIs a test needs.
+        let path = format!(
+            "{}:{}:{}",
+            self.dir.join("stubs").display(),
+            bin.parent().unwrap().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let mut hook = Command::new("/bin/sh");
+        for var in pm::state::dirs::XDG_VARS {
+            hook.env_remove(var);
+        }
+        let mut hook = hook
+            .args(["-c", self.command])
+            .env(
+                "PM_TMUX_SERVER",
+                format!("pm-test-{}-stop-none", std::process::id()),
+            )
+            .env_remove("TMUX")
+            .env_remove("TMUX_PANE")
+            .env("HOME", self.dir)
+            .env("PATH", path)
+            .env("PM_AGENT_NAME", AGENT)
+            .env(paths::AGENT_WORKTREE_ENV, &self.worktree)
+            .current_dir(&self.cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = hook.stdin.take().unwrap();
+        std::io::Write::write_all(&mut stdin, self.payload.as_bytes()).unwrap();
+        hook
+    }
 }
 
 fn wait_for_exit(hook: &mut Child) {
@@ -116,7 +136,7 @@ fn wait_for_exit(hook: &mut Child) {
 fn a_signal_from_another_process_leaves_the_hook_armed() {
     let dir = tempdir().unwrap();
     project(dir.path());
-    let mut hook = spawn_hook(dir.path());
+    let mut hook = armed_hook(dir.path(), &dir.path().join("main"));
 
     // A foreign sender, aimed at this hook's pid only: tests run alongside
     // real agents, whose hooks a pattern would also hit.
@@ -153,7 +173,7 @@ fn the_hook_finds_its_agent_wherever_the_agents_shell_has_moved() {
     project(dir.path());
     let elsewhere = paths::summaries_dir(dir.path());
     std::fs::create_dir_all(&elsewhere).unwrap();
-    let mut hook = spawn_hook_in(dir.path(), &elsewhere);
+    let mut hook = armed_hook(dir.path(), &elsewhere);
 
     pm::messages::send(
         &paths::messages_dir(dir.path()),
@@ -173,7 +193,7 @@ fn the_hook_finds_its_agent_wherever_the_agents_shell_has_moved() {
 fn a_signal_from_the_harness_ends_the_hook_and_says_why() {
     let dir = tempdir().unwrap();
     project(dir.path());
-    let mut hook = spawn_hook(dir.path());
+    let mut hook = armed_hook(dir.path(), &dir.path().join("main"));
 
     // This test process is the hook's harness: its parent.
     // SAFETY: signalling a child this test owns.
@@ -208,7 +228,7 @@ fn kind(dir: &Path) -> Option<WaitingKind> {
 
 /// Claude Code's waiter, run as Claude Code runs it.
 fn waiter(dir: &Path) -> Child {
-    start(dir, &stop_hook_command(Harness::ClaudeCode))
+    Hook::new(dir, &stop_hook_command(Harness::ClaudeCode)).start()
 }
 
 /// Once `dir`'s agent reads idle with `hook` as its waiter.
@@ -336,7 +356,10 @@ fn a_waiter_going_idle_sends_its_features_due_ready_notice_once() {
     let command = stop_hook_command(Harness::ClaudeCode);
 
     for _ in 0..2 {
-        let mut hook = start_for(root, &worktree, &worktree, &command, "");
+        let mut hook = Hook::new(root, &command)
+            .worktree(&worktree)
+            .cwd(&worktree)
+            .start();
         let start = Instant::now();
         while runtime::read_waiting(root, "login", AGENT).map(|w| w.kind) != Some(WaitingKind::Idle)
             || runtime::read_waiter(root, "login", AGENT) != Some(hook.id())
@@ -395,7 +418,8 @@ fn a_waiter_whose_harness_is_gone_ends_and_marks_nothing() {
     project(dir.path());
     // A harness that runs the waiter, then exits.
     let command = stop_hook_command(Harness::ClaudeCode).replace('\'', "'\\''");
-    let mut harness = start(dir.path(), &format!("/bin/sh -c '{command}' & sleep 2"));
+    let harness = format!("/bin/sh -c '{command}' & sleep 2");
+    let mut harness = Hook::new(dir.path(), &harness).start();
     let start = Instant::now();
     let pid = loop {
         if kind(dir.path()) == Some(WaitingKind::Idle)
@@ -472,7 +496,9 @@ fn a_background_task_the_payload_lists_never_keeps_a_message_from_waking_the_age
     let dir = tempdir().unwrap();
     project(dir.path());
     let payload = r#"{"background_tasks":[{"id":"bash_7","status":"running"}],"session_crons":[]}"#;
-    let mut hook = start_with(dir.path(), &stop_hook_command(Harness::ClaudeCode), payload);
+    let mut hook = Hook::new(dir.path(), &stop_hook_command(Harness::ClaudeCode))
+        .payload(payload)
+        .start();
     let start = Instant::now();
     while kind(dir.path()) != Some(WaitingKind::Background) {
         assert!(start.elapsed() < Duration::from_secs(10), "never waited");
@@ -511,7 +537,9 @@ fn a_subagents_dialog_open_as_the_turn_ends_keeps_the_agent_asking() {
     runtime::write_dialog(dir.path(), "main", AGENT, &record).unwrap();
 
     let payload = r#"{"background_tasks":[{"id":"a1","status":"running"}],"session_crons":[]}"#;
-    let mut hook = start_with(dir.path(), &stop_hook_command(Harness::ClaudeCode), payload);
+    let mut hook = Hook::new(dir.path(), &stop_hook_command(Harness::ClaudeCode))
+        .payload(payload)
+        .start();
     let start = Instant::now();
     while runtime::read_waiter(dir.path(), "main", AGENT).is_none() || kind(dir.path()).is_none() {
         assert!(start.elapsed() < Duration::from_secs(10), "never waited");
@@ -541,11 +569,9 @@ fn a_codex_waiter_starts_a_turn_on_its_sessions_thread() {
     runtime::write_inbound(dir.path(), "main", AGENT, Some(&inbound)).unwrap();
     send(dir.path());
 
-    let mut hook = start_with(
-        dir.path(),
-        &stop_hook_command(Harness::Codex),
-        CODEX_PAYLOAD,
-    );
+    let mut hook = Hook::new(dir.path(), &stop_hook_command(Harness::Codex))
+        .payload(CODEX_PAYLOAD)
+        .start();
     wait_for_exit(&mut hook);
     let out = hook.wait_with_output().unwrap();
 
@@ -566,11 +592,9 @@ fn a_codex_waiter_with_no_session_to_post_to_leaves_the_agent_unarmed() {
     project(dir.path());
     send(dir.path());
 
-    let mut hook = start_with(
-        dir.path(),
-        &stop_hook_command(Harness::Codex),
-        CODEX_PAYLOAD,
-    );
+    let mut hook = Hook::new(dir.path(), &stop_hook_command(Harness::Codex))
+        .payload(CODEX_PAYLOAD)
+        .start();
     wait_for_exit(&mut hook);
     let out = hook.wait_with_output().unwrap();
 
@@ -612,11 +636,12 @@ fn register_in(dir: &Path, scope: &str, harness: Harness) {
 /// started for `source`.
 fn session_start(dir: &Path, source: &str) -> Child {
     let payload = serde_json::json!({"session_id": "s1", "source": source}).to_string();
-    start_with(
+    Hook::new(
         dir,
         &pm::commands::hooks_install::session_start_hook_command(),
-        &payload,
     )
+    .payload(&payload)
+    .start()
 }
 
 #[test]
