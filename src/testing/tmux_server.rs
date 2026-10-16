@@ -1,8 +1,9 @@
 //! The tmux servers tests run on: one shared hermetic server per test binary,
 //! and a test's own when it attaches a client.
 
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::fake_harness::window_path;
 use super::pty_budget::enforce_soft_cap;
@@ -173,6 +174,35 @@ fn shared_server_name() -> &'static str {
     })
 }
 
+/// When [`enforce_pty_budget`] last passed.
+static BUDGET_PASSED: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// How long a passed budget check stands. Leaks build up over many tests
+/// and the budget holds two fifths of the system's ptys in reserve, so a
+/// second's delay in noticing one is safe, and it spares most tests the
+/// `/dev` scan and tmux call.
+const BUDGET_RECHECK: Duration = Duration::from_secs(1);
+
+/// Abort before a test creates sessions once the system's ptys near its
+/// limit, or once the shared server holds more sessions than any run
+/// should, which means they leaked; each panic names the recovery command.
+fn enforce_pty_budget() {
+    let mut passed = BUDGET_PASSED.lock().unwrap_or_else(|e| e.into_inner());
+    if passed.is_some_and(|at| at.elapsed() < BUDGET_RECHECK) {
+        return;
+    }
+    if let Err(msg) = enforce_system_pty_cap() {
+        panic!("{msg}");
+    }
+    let count = crate::tmux::list_sessions(Some(shared_server_name()))
+        .map(|s| s.len())
+        .unwrap_or(0);
+    if let Err(msg) = enforce_soft_cap(count, std::process::id()) {
+        panic!("{msg}");
+    }
+    *passed = Some(Instant::now());
+}
+
 /// RAII guard for a shared tmux test server. All tests share a single tmux
 /// server process (one per cargo-test binary) to minimise pty usage. Each
 /// `TestServer` instance gets a unique prefix so session names don't collide
@@ -191,36 +221,12 @@ impl Default for TestServer {
 
 impl TestServer {
     pub fn new() -> Self {
-        // System-wide pty check: abort before creating any new sessions
-        // if we're approaching the macOS pty limit.
-        if let Err(msg) = enforce_system_pty_cap() {
-            panic!("{msg}");
-        }
-
+        enforce_pty_budget();
         let id = TMUX_SERVER_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let server = Self {
+        Self {
             prefix: format!("t{id}"),
             own: None,
-        };
-
-        // Soft cap: if the shared server is holding an unreasonable number
-        // of sessions we've almost certainly leaked. Fail loudly with a
-        // recovery command rather than cascading into system-wide pty
-        // exhaustion.
-        let count = crate::tmux::list_sessions(server.name())
-            .map(|s| s.len())
-            .unwrap_or(0);
-        if let Err(msg) = enforce_soft_cap(count, std::process::id()) {
-            panic!("{msg}");
         }
-
-        server
-    }
-
-    /// The registry dir `setup_project` wrote for a project at `project_path`:
-    /// a sibling `registry/` directory.
-    pub fn registry_dir(project_path: &std::path::Path) -> std::path::PathBuf {
-        project_path.parent().unwrap().join("registry")
     }
 
     /// A [`TestServer`] on an [`OwnServer`], for a test that attaches a

@@ -7,7 +7,7 @@ use super::*;
 fn merge_skips_local_merge_when_already_merged_upstream() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
 
     // Simulate the branch being merged upstream by merging it directly in the main worktree via git
     let main_repo = paths::main_worktree(&project_path);
@@ -20,14 +20,7 @@ fn merge_skips_local_merge_when_already_merged_upstream() {
     git::merge_no_ff(&main_repo, "login").unwrap();
 
     // Now pm feat merge should succeed without attempting a redundant merge
-    feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        false,
-        server.name(),
-    )
-    .unwrap();
+    feat_merge(&project_path, &projects_dir, "login", false, server.name()).unwrap();
 
     // Cleanup should have happened
     assert!(!project_path.join("login").exists());
@@ -38,7 +31,7 @@ fn merge_skips_local_merge_when_already_merged_upstream() {
 fn merge_detects_remote_merge_and_pulls() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
 
     let main_repo = paths::main_worktree(&project_path);
     let worktree = project_path.join("login");
@@ -73,14 +66,7 @@ fn merge_detects_remote_merge_and_pulls() {
     assert!(!main_repo.join("feature.txt").exists());
 
     // pm feat merge should fetch, detect the remote merge, pull, and clean up
-    feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        false,
-        server.name(),
-    )
-    .unwrap();
+    feat_merge(&project_path, &projects_dir, "login", false, server.name()).unwrap();
 
     // Verify pull brought in the merged changes
     assert!(main_repo.join("feature.txt").exists());

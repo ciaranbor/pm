@@ -95,7 +95,7 @@ mod tests {
         feature_name: &str,
         server: &TestServer,
     ) -> std::path::PathBuf {
-        let (project_path, _) = server.setup_project_with_feature(dir, feature_name);
+        let (project_path, _, _) = server.setup_project_with_feature_no_tmux(dir, feature_name);
 
         // Create a bare remote to push to
         let remote_path = dir.join("remote.git");
@@ -172,7 +172,7 @@ mod tests {
     fn feat_pr_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, _) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project_no_tmux(dir.path());
 
         let result = feat_pr(&project_path, &projects_dir, "nonexistent", false, None);
         assert!(result.is_err());

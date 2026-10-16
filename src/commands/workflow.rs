@@ -213,7 +213,7 @@ pub fn get(project_root: &Path, name: &str) -> Result<Option<WorkflowDef>> {
 mod tests {
     use super::*;
     use crate::state::feature::FeatureState;
-    use chrono::Utc;
+    use crate::testing::feature_state;
     use tempfile::tempdir;
 
     fn setup_project_root() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -237,18 +237,10 @@ mod tests {
     }
 
     fn write_feature_state(features_dir: &Path, name: &str, workflow: Option<&str>) {
-        let now = Utc::now();
         let state = FeatureState {
-            status: crate::state::feature::FeatureStatus::Wip,
-            branch: name.to_string(),
-            worktree: name.to_string(),
             base: "main".to_string(),
-            pr: String::new(),
-            context: String::new(),
             workflow: workflow.map(|s| s.to_string()),
-            created: now,
-            last_active: now,
-            team: Default::default(),
+            ..feature_state(name)
         };
         state.save(features_dir, name).unwrap();
     }

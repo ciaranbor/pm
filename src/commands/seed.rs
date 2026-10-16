@@ -419,7 +419,7 @@ mod tests {
     fn pull_brings_customs_added_to_main_after_the_feature_was_created() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&project);
         let feature_wt = project.join("login");
         assert!(pull(&project, "login", true).unwrap().written.is_empty());
@@ -475,7 +475,7 @@ mod tests {
     fn seed_and_pull_leave_files_the_feature_branch_tracks() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&project);
         let feature_wt = project.join("login");
         let tracked = [".agents/skills/custom/SKILL.md", ".claude/settings.json"];
@@ -525,7 +525,7 @@ mod tests {
     fn a_skill_the_branch_deleted_loses_its_projection_and_gets_none_of_mains_later_files() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&project);
         let feature_wt = project.join("login");
         for rel in [
@@ -569,7 +569,7 @@ mod tests {
     fn seed_and_pull_leave_absent_what_the_feature_branch_deleted() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&project);
         let feature_wt = project.join("login");
         let deleted = [".agents/skills/gone/SKILL.md", ".claude/settings.json"];
@@ -628,7 +628,7 @@ mod tests {
     fn feature_projects_its_own_skills_over_mains() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&project);
         let feature_wt = project.join("login");
 

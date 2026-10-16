@@ -167,6 +167,7 @@ pub fn probe_line(harness: Harness, project_root: Option<&Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::project_entry;
     use tempfile::tempdir;
 
     #[test]
@@ -197,12 +198,7 @@ mod tests {
     fn registry_warnings_name_each_unreadable_entry_only() {
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
-        let good = ProjectEntry {
-            root: "/tmp/good".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let good = project_entry("/tmp/good");
         good.save(&projects_dir, "good").unwrap();
         let bad = projects_dir.join("bad.toml");
         std::fs::write(&bad, "root = ").unwrap();
@@ -230,14 +226,7 @@ mod tests {
             ("here", here),
             ("gone", dir.path().join("gone")),
         ] {
-            ProjectEntry {
-                root: root.to_string_lossy().into_owned(),
-                main_branch: "main".to_string(),
-                repo_url: None,
-                state_remote: None,
-            }
-            .save(&projects_dir, name)
-            .unwrap();
+            project_entry(&root).save(&projects_dir, name).unwrap();
         }
 
         let warnings = registry_warnings(&projects_dir).unwrap();

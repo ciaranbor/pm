@@ -4,7 +4,8 @@ use super::*;
 fn delete_of_a_merged_ready_feature_main_has_read_keeps_its_summary_and_notifies_main() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+    let (project_path, projects_dir, _) =
+        server.setup_project_with_feature_no_tmux(dir.path(), "login");
     TestServer::add_feature_commit(&project_path, "login");
     git::run_git(
         &paths::main_worktree(&project_path),
@@ -33,7 +34,7 @@ fn delete_of_a_merged_ready_feature_main_has_read_keeps_its_summary_and_notifies
     )
     .unwrap();
 
-    delete(&server, &project_path, false);
+    delete(&server, &project_path, &projects_dir, false);
 
     assert!(paths::summary_path(&project_path, "login").exists());
     let inbox = main_inbox(&project_path);
@@ -53,10 +54,11 @@ fn delete_of_a_merged_ready_feature_main_has_read_keeps_its_summary_and_notifies
 fn force_delete_of_unmerged_work_tells_main_it_never_landed() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+    let (project_path, projects_dir, _) =
+        server.setup_project_with_feature_no_tmux(dir.path(), "login");
     TestServer::add_feature_commit(&project_path, "login");
 
-    delete(&server, &project_path, true);
+    delete(&server, &project_path, &projects_dir, true);
 
     let inbox = main_inbox(&project_path);
     assert_eq!(inbox.len(), 1, "{inbox:?}");
@@ -68,14 +70,15 @@ fn force_delete_of_unmerged_work_tells_main_it_never_landed() {
 fn delete_after_merge_keep_tells_main_it_merged_despite_later_commits() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+    let (project_path, projects_dir, _) =
+        server.setup_project_with_feature_no_tmux(dir.path(), "login");
     let features_dir = paths::features_dir(&project_path);
     let mut state = FeatureState::load(&features_dir, "login").unwrap();
     state.status = FeatureStatus::Merged;
     state.save(&features_dir, "login").unwrap();
     TestServer::add_feature_commit(&project_path, "login");
 
-    delete(&server, &project_path, true);
+    delete(&server, &project_path, &projects_dir, true);
 
     let inbox = main_inbox(&project_path);
     assert_eq!(inbox.len(), 1, "{inbox:?}");
@@ -86,9 +89,10 @@ fn delete_after_merge_keep_tells_main_it_merged_despite_later_commits() {
 fn delete_of_a_feature_without_commits_is_not_reported_merged() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+    let (project_path, projects_dir, _) =
+        server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
-    delete(&server, &project_path, false);
+    delete(&server, &project_path, &projects_dir, false);
 
     let inbox = main_inbox(&project_path);
     assert_eq!(inbox.len(), 1, "{inbox:?}");
@@ -99,21 +103,15 @@ fn delete_of_a_feature_without_commits_is_not_reported_merged() {
 fn delete_of_a_renamed_feature_without_commits_is_not_reported_merged() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "auth");
+    let (project_path, projects_dir, _) =
+        server.setup_project_with_feature_no_tmux(dir.path(), "auth");
     git::rename_branch(&paths::main_worktree(&project_path), "auth", "login").unwrap();
     let features_dir = paths::features_dir(&project_path);
     let mut state = FeatureState::load(&features_dir, "auth").unwrap();
     state.branch = "login".to_string();
     state.save(&features_dir, "auth").unwrap();
 
-    feat_delete(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "auth",
-        false,
-        server.name(),
-    )
-    .unwrap();
+    feat_delete(&project_path, &projects_dir, "auth", false, server.name()).unwrap();
 
     let inbox = main_inbox(&project_path);
     assert_eq!(inbox.len(), 1, "{inbox:?}");
@@ -124,9 +122,10 @@ fn delete_of_a_renamed_feature_without_commits_is_not_reported_merged() {
 fn delete_without_a_summary_still_tells_main_the_feature_ended() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+    let (project_path, projects_dir, _) =
+        server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
-    delete(&server, &project_path, false);
+    delete(&server, &project_path, &projects_dir, false);
 
     let inbox = main_inbox(&project_path);
     assert_eq!(inbox.len(), 1, "{inbox:?}");

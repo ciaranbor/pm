@@ -7,7 +7,7 @@ mod hook;
 mod upstream;
 
 use super::*;
-use crate::commands::{feat_new, init};
+use crate::commands::feat_new;
 use crate::hooks;
 use crate::state::feature::FeatureState;
 use crate::testing::TestServer;
@@ -18,18 +18,11 @@ use tempfile::tempdir;
 fn merge_integrates_feature_commits_into_main() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
 
     TestServer::add_feature_commit(&project_path, "login");
 
-    feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        true,
-        server.name(),
-    )
-    .unwrap();
+    feat_merge(&project_path, &projects_dir, "login", true, server.name()).unwrap();
 
     // Verify the feature file is now in main
     let main_repo = paths::main_worktree(&project_path);
@@ -40,7 +33,7 @@ fn merge_integrates_feature_commits_into_main() {
 fn merge_tells_main_the_feature_merged_and_keeps_its_summary() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
     TestServer::add_feature_commit(&project_path, "login");
     std::fs::write(
         crate::commands::feat_summary::path(&project_path, "login").unwrap(),
@@ -48,14 +41,7 @@ fn merge_tells_main_the_feature_merged_and_keeps_its_summary() {
     )
     .unwrap();
 
-    feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        false,
-        server.name(),
-    )
-    .unwrap();
+    feat_merge(&project_path, &projects_dir, "login", false, server.name()).unwrap();
 
     assert!(paths::summary_path(&project_path, "login").exists());
     let msg = crate::messages::read_at(
@@ -83,18 +69,11 @@ fn merge_tells_main_the_feature_merged_and_keeps_its_summary() {
 fn merge_creates_merge_commit() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
 
     TestServer::add_feature_commit(&project_path, "login");
 
-    feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        true,
-        server.name(),
-    )
-    .unwrap();
+    feat_merge(&project_path, &projects_dir, "login", true, server.name()).unwrap();
 
     // Check that the latest commit in main is a merge commit (has two parents)
     let main_repo = paths::main_worktree(&project_path);
@@ -107,20 +86,14 @@ fn merge_creates_merge_commit() {
 fn merge_blocks_on_dirty_feature_worktree() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
 
     // Stage a file in the feature worktree (uncommitted change)
     let worktree = project_path.join("login");
     std::fs::write(worktree.join("dirty.txt"), "uncommitted").unwrap();
     git::stage_file(&worktree, "dirty.txt").unwrap();
 
-    let result = feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        true,
-        server.name(),
-    );
+    let result = feat_merge(&project_path, &projects_dir, "login", true, server.name());
     assert!(result.is_err());
     assert!(
         result
@@ -134,8 +107,8 @@ fn merge_blocks_on_dirty_feature_worktree() {
 fn merge_refuses_a_feature_paused_mid_rebase_with_a_clean_tree() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
-    let registry = TestServer::registry_dir(&project_path);
+    let (project_path, registry, _) =
+        server.setup_project_with_feature_no_tmux(dir.path(), "login");
     TestServer::add_feature_commit(&project_path, "login");
     let worktree = project_path.join("login");
     TestServer::pause_rebase(&worktree, "main");
@@ -158,20 +131,14 @@ fn merge_refuses_a_feature_paused_mid_rebase_with_a_clean_tree() {
 fn merge_blocks_on_dirty_main_worktree() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
 
     // Stage a file in the main worktree (uncommitted change)
     let main_repo = paths::main_worktree(&project_path);
     std::fs::write(main_repo.join("dirty.txt"), "uncommitted").unwrap();
     git::stage_file(&main_repo, "dirty.txt").unwrap();
 
-    let result = feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        true,
-        server.name(),
-    );
+    let result = feat_merge(&project_path, &projects_dir, "login", true, server.name());
     assert!(result.is_err());
     assert!(
         result
@@ -185,7 +152,7 @@ fn merge_blocks_on_dirty_main_worktree() {
 fn merge_conflict_aborts_cleanly() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
 
     // Create a conflicting file on both main and feature
     let main_repo = paths::main_worktree(&project_path);
@@ -198,13 +165,7 @@ fn merge_conflict_aborts_cleanly() {
     git::stage_file(&worktree, "shared.txt").unwrap();
     git::commit(&worktree, "feature change").unwrap();
 
-    let result = feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        true,
-        server.name(),
-    );
+    let result = feat_merge(&project_path, &projects_dir, "login", true, server.name());
     assert!(
         matches!(result, Err(PmError::MergeAborted(_))),
         "{result:?}"
@@ -223,9 +184,7 @@ fn merge_conflict_aborts_cleanly() {
 fn merge_nonexistent_feature_fails() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let project_path = dir.path().join(server.scope("myapp"));
-    let projects_dir = dir.path().join("registry");
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+    let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
     let result = feat_merge(&project_path, &projects_dir, "nonexistent", true, None);
     assert!(result.is_err());

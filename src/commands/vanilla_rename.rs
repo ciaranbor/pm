@@ -103,19 +103,15 @@ fn registry_scopes(agents_dir: &Path) -> Result<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::Harness;
     use crate::state::agent::AgentEntry;
+    use crate::testing::agent_entry;
     use tempfile::tempdir;
 
     fn entry(definition: Option<&str>) -> AgentEntry {
         AgentEntry {
-            agent_type: AgentType::Agent,
             session_id: "sid".to_string(),
-            window_name: String::new(),
-            active: true,
             agent_definition: definition.map(str::to_string),
-            harness: Harness::ClaudeCode,
-            spawned_at: None,
+            ..agent_entry("")
         }
     }
 

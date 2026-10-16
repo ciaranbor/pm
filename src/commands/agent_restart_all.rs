@@ -773,7 +773,7 @@ mod tests {
     fn all_restarts_idle_and_dead_agents_and_skips_one_mid_turn() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project, &session, "login", "implementer");
         server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");
@@ -813,7 +813,7 @@ mod tests {
     fn stale_restarts_only_running_stale_agents_and_defers_a_busy_one_to_its_next_idle() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");
         server.spawn_idle_fake_agent(&project, &session, "login", "current");
@@ -874,7 +874,7 @@ mod tests {
         use crate::state::project::ProjectConfig;
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         let pm_dir = paths::pm_dir(&project);
         let mut config = ProjectConfig::load(&pm_dir).unwrap();
@@ -953,7 +953,7 @@ mod tests {
     fn all_with_force_interrupts_a_mid_turn_agent_and_tells_only_it_to_resume() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project, &session, "login", "implementer");
         server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");
@@ -993,8 +993,8 @@ mod tests {
     fn global_covers_every_scope_of_every_project_and_leaves_closed_sessions_closed() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (first, first_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&first);
+        let (first, projects_dir, first_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let other_name = server.scope("other");
         let other = dir.path().join(&other_name);
         crate::commands::init::init(&other, &projects_dir, None, server.name()).unwrap();
@@ -1053,7 +1053,7 @@ mod tests {
     fn an_agent_whose_harness_does_not_come_up_holds_back_the_rest_of_its_harness() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         for agent in ["implementer", "reviewer"] {
             server.spawn_idle_fake_agent(&project, &session, "login", agent);

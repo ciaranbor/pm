@@ -109,13 +109,13 @@ mod tests {
     use super::*;
     use crate::commands::feat_new;
     use crate::state::feature::FeatureState;
-    use crate::testing::{ControlClient, OwnServer, TestServer};
+    use crate::testing::{ControlClient, OwnServer, TestServer, project_entry};
     use tempfile::tempdir;
 
     #[test]
     fn close_moves_only_the_clients_viewing_the_project() {
         let dir = tempdir().unwrap();
-        let (project, name) =
+        let (project, _, name) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         let own = OwnServer::start("close-clients");
         for session in [
@@ -210,7 +210,7 @@ mod tests {
     fn close_idempotent_when_sessions_already_gone() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _projects_dir, project_name) = server.setup_project(dir.path());
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         // Kill sessions manually first
         let main_session = format!("{project_name}/main");
@@ -230,7 +230,7 @@ mod tests {
     fn close_only_main_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _projects_dir, project_name) = server.setup_project(dir.path());
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         let Closed {
             project: name,
@@ -277,7 +277,7 @@ mod tests {
         // No tmux sessions created — close_all should report killed 0, not error.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (_project_path, projects_dir, project_name) = server.setup_project_no_tmux(dir.path());
+        let (_, projects_dir, project_name) = server.setup_project_no_tmux(dir.path());
 
         let (msgs, _) = close_all_with_dir(&projects_dir, server.name()).unwrap();
         assert!(
@@ -304,12 +304,7 @@ mod tests {
         let server = TestServer::new();
         let projects_dir = dir.path().join("registry");
 
-        let entry = ProjectEntry {
-            root: dir.path().join("gone").to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry(dir.path().join("gone"));
         entry.save(&projects_dir, "ghost").unwrap();
 
         let (msgs, _) = close_all_with_dir(&projects_dir, server.name()).unwrap();
@@ -331,12 +326,7 @@ mod tests {
         // Broken project: on this machine, no .pm/ config
         let broken_path = dir.path().join("broken");
         std::fs::create_dir_all(paths::main_worktree(&broken_path)).unwrap();
-        let broken = ProjectEntry {
-            root: broken_path.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let broken = project_entry(&broken_path);
         broken.save(&projects_dir, "broken").unwrap();
 
         // Healthy project alongside it
@@ -360,7 +350,7 @@ mod tests {
     fn close_does_not_kill_other_sessions() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _projects_dir, project_name) = server.setup_project(dir.path());
+        let (project_path, _, project_name) = server.setup_project(dir.path());
 
         // Create a session that belongs to a different project
         let other_session = format!("{}-other/main", server.scope(""));

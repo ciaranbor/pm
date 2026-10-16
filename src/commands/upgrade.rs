@@ -339,17 +339,10 @@ fn upgrade_in(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::Harness;
+    use crate::testing::{agent_entry, bare_project, project_entry};
     use std::fs;
     use std::path::PathBuf;
     use tempfile::tempdir;
-
-    fn setup_project(dir: &std::path::Path) -> PathBuf {
-        let root = dir.to_path_buf();
-        fs::create_dir_all(root.join(".pm").join("features")).unwrap();
-        fs::create_dir_all(paths::main_worktree(&root)).unwrap();
-        root
-    }
 
     fn write_feature_toml(root: &std::path::Path, name: &str) {
         let content = format!(
@@ -374,22 +367,17 @@ last_active = "2026-01-01T00:00:00Z"
 
     #[test]
     fn upgrade_relaunches_registered_default_agents_as_plain() {
-        use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+        use crate::state::agent::{AgentEntry, AgentRegistry};
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         skills::install_global().unwrap();
         let agents_dir = paths::agents_dir(&root);
         let mut registry = AgentRegistry::default();
         registry.register(
             "default",
             AgentEntry {
-                agent_type: AgentType::Agent,
                 session_id: "sid".to_string(),
-                window_name: "default".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("default")
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -419,7 +407,7 @@ last_active = "2026-01-01T00:00:00Z"
     #[test]
     fn upgrade_installs_hooks_and_state_but_no_bundled_copies() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         // The tier `pm update` installs before touching any project — the
         // per-project pass deliberately doesn't.
         skills::install_global().unwrap();
@@ -453,7 +441,7 @@ last_active = "2026-01-01T00:00:00Z"
         // a user custom def, live registry/feature/message state. One upgrade
         // must leave it working.
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         let main = paths::main_worktree(&root);
         let claude = main.join(".claude");
         fs::create_dir_all(claude.join("agents")).unwrap();
@@ -533,7 +521,7 @@ last_active = "2026-01-01T00:00:00Z"
     #[test]
     fn migrated_project_keeps_its_customs_on_later_upgrades() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         upgrade_project(&root).unwrap();
 
         // A bundled-named file written after the marker is the user's.
@@ -583,7 +571,7 @@ last_active = "2026-01-01T00:00:00Z"
     #[test]
     fn upgrade_leaves_feature_worktrees_untouched() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         // Main has customs and settings the feature lacks or holds stale.
         let main = paths::main_worktree(&root);
@@ -620,7 +608,7 @@ last_active = "2026-01-01T00:00:00Z"
     #[test]
     fn upgrade_bootstraps_docs() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         upgrade_project(&root).unwrap();
 
@@ -637,7 +625,7 @@ last_active = "2026-01-01T00:00:00Z"
     #[test]
     fn dry_run_reports_actions_on_fresh_project_and_writes_nothing() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let actions = upgrade_project_dry_run(&root).unwrap().0;
         let joined = actions.join("\n");
@@ -661,7 +649,7 @@ last_active = "2026-01-01T00:00:00Z"
     #[test]
     fn dry_run_returns_empty_when_up_to_date_and_reports_drifted_projections() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         // What `pm update` installs before the per-project pass.
         hooks_install::install_in(&paths::home_dir().unwrap(), false).unwrap();
         upgrade_project(&root).unwrap();
@@ -685,15 +673,10 @@ last_active = "2026-01-01T00:00:00Z"
         let server = crate::testing::TestServer::new();
         let dir = tempdir().unwrap();
         let registry = tempdir().unwrap();
-        let (root, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        ProjectEntry {
-            root: root.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        }
-        .save(registry.path(), &project_name)
-        .unwrap();
+        let (root, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        project_entry(&root)
+            .save(registry.path(), &project_name)
+            .unwrap();
         let session = crate::tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&root, &session, "login", "reviewer");
         skills::install_global().unwrap();
@@ -738,15 +721,8 @@ last_active = "2026-01-01T00:00:00Z"
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("registry");
         for name in ["one", "two"] {
-            let root = setup_project(&dir.path().join(name));
-            ProjectEntry {
-                root: root.to_string_lossy().to_string(),
-                main_branch: "main".to_string(),
-                repo_url: None,
-                state_remote: None,
-            }
-            .save(&projects_dir, name)
-            .unwrap();
+            let root = bare_project(&dir.path().join(name));
+            project_entry(&root).save(&projects_dir, name).unwrap();
         }
 
         let lines = upgrade_projects(&projects_dir, false).unwrap().0;
@@ -781,14 +757,7 @@ last_active = "2026-01-01T00:00:00Z"
         let projects_dir = dir.path().join("registry");
         let husk = dir.path().join("husk");
         fs::create_dir_all(husk.join(".pm/messages")).unwrap();
-        ProjectEntry {
-            root: husk.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        }
-        .save(&projects_dir, "husk")
-        .unwrap();
+        project_entry(&husk).save(&projects_dir, "husk").unwrap();
 
         let skip = "husk: skipped (not on this machine: run `pm restore husk`)".to_string();
         assert!(
@@ -815,15 +784,10 @@ last_active = "2026-01-01T00:00:00Z"
         let projects_dir = dir.path().join("registry");
         write_raw_registry_entry(&projects_dir, "exo-bench", "exo-bench");
 
-        let good_root = setup_project(&dir.path().join("good"));
-        ProjectEntry {
-            root: good_root.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        }
-        .save(&projects_dir, "good")
-        .unwrap();
+        let good_root = bare_project(&dir.path().join("good"));
+        project_entry(&good_root)
+            .save(&projects_dir, "good")
+            .unwrap();
 
         let lines = upgrade_projects(&projects_dir, false).unwrap().0;
         let joined = lines.join("\n");

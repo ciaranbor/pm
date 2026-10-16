@@ -95,15 +95,11 @@ pub fn init_in(
     let session_name = tmux::session_name(&name, scope::MAIN);
     let built = populate(path, &name, global, git_url).and_then(|main_branch| {
         tmux::create_session(tmux_server, &session_name, &paths::main_worktree(path))?;
-        let entry = ProjectEntry {
-            root: crate::path_utils::to_portable(path),
-            main_branch,
-            repo_url: git_url.map(|u| u.to_string()),
-            state_remote: None,
-        };
-        entry.save(projects_dir, &name).inspect_err(|_| {
-            let _ = tmux::kill_session(tmux_server, &session_name);
-        })
+        registry_entry(path, main_branch, git_url)
+            .save(projects_dir, &name)
+            .inspect_err(|_| {
+                let _ = tmux::kill_session(tmux_server, &session_name);
+            })
     });
     if let Err(e) = built {
         let _ = std::fs::remove_dir_all(&created);
@@ -113,9 +109,23 @@ pub fn init_in(
     Ok(path_buf)
 }
 
+/// The registry entry [`init_in`] saves for the project at `path`.
+pub(crate) fn registry_entry(
+    path: &Path,
+    main_branch: String,
+    git_url: Option<&str>,
+) -> ProjectEntry {
+    ProjectEntry {
+        root: crate::path_utils::to_portable(path),
+        main_branch,
+        repo_url: git_url.map(|u| u.to_string()),
+        state_remote: None,
+    }
+}
+
 /// The part of [`init_in`] that builds the project on disk, returning its
 /// main branch.
-fn populate(
+pub(crate) fn populate(
     path: &Path,
     name: &str,
     global: &GlobalStore,

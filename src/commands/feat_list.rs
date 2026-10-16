@@ -81,16 +81,14 @@ pub fn feat_list_all(projects_dir: &Path) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::commands::{feat_new, init};
-    use crate::testing::TestServer;
+    use crate::testing::{TestServer, feature_state};
     use tempfile::tempdir;
 
     #[test]
     fn feat_list_with_no_features_returns_empty() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         let lines = feat_list(&project_path).unwrap();
         assert!(lines.is_empty());
@@ -99,30 +97,23 @@ mod tests {
     #[test]
     fn feat_list_shows_annotations_for_enriched_fields() {
         use crate::state::feature::{FeatureState, FeatureStatus};
-        use chrono::Utc;
 
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         // Create a feature with non-default branch, base, and pr
         let features_dir = paths::features_dir(&project_path);
         let state = FeatureState {
             status: FeatureStatus::Review,
-            branch: "feature/login-v2".to_string(),
-            worktree: "login".to_string(),
-            base: "develop".to_string(),
-            pr: "https://github.com/org/repo/pull/42".to_string(),
-            context: String::new(),
-            workflow: None,
-            created: Utc::now(),
-            last_active: Utc::now(),
             team: crate::state::scope::TeamStatus {
                 progress: crate::state::feature::Progress::Blocked,
                 ..Default::default()
             },
+            worktree: "login".to_string(),
+            base: "develop".to_string(),
+            pr: "https://github.com/org/repo/pull/42".to_string(),
+            ..feature_state("feature/login-v2")
         };
         state.save(&features_dir, "login").unwrap();
 
@@ -139,16 +130,7 @@ mod tests {
     fn feat_list_omits_branch_when_same_as_name() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-            &project_path,
-            &projects_dir,
-            "alpha",
-            server.name(),
-        ))
-        .unwrap();
+        let (project_path, _, _) = server.setup_project_with_feature(dir.path(), "alpha");
 
         let lines = feat_list(&project_path).unwrap();
         assert!(!lines[0].contains("branch:"));
@@ -158,16 +140,8 @@ mod tests {
     fn feat_list_shows_all_features_with_status() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-            &project_path,
-            &projects_dir,
-            "alpha",
-            server.name(),
-        ))
-        .unwrap();
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "alpha");
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
             &projects_dir,

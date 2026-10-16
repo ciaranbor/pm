@@ -472,7 +472,8 @@ mod tests {
         assert!(!error.contains("Use --force"), "{error}");
         assert!(paths::pm_dir(&f.project).exists());
         assert!(
-            TestServer::registry_dir(&f.project)
+            f.config
+                .projects_dir
                 .join(format!("{}.toml", f.project_name))
                 .exists()
         );

@@ -89,10 +89,10 @@ fn plain_line(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::commands::attention::scope_latest;
-    use crate::state::agent::{AgentRegistry, AgentType};
+    use crate::state::agent::AgentRegistry;
     use crate::state::paths;
     use crate::state::runtime::SessionPath;
-    use crate::testing::TestServer;
+    use crate::testing::{TestServer, agent_entry};
     use tempfile::tempdir;
 
     fn reply(uuid: &str, text: &str) -> String {
@@ -113,13 +113,8 @@ mod tests {
             registry.register(
                 name,
                 AgentEntry {
-                    agent_type: AgentType::Agent,
                     session_id: session.to_string(),
-                    window_name: name.to_string(),
-                    active: true,
-                    agent_definition: None,
-                    harness: crate::harness::Harness::ClaudeCode,
-                    spawned_at: None,
+                    ..agent_entry(name)
                 },
             );
         }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::testing::project_entry;
 
 #[test]
 fn open_all_reopens_every_project_and_skips_those_not_here() {
@@ -17,24 +18,12 @@ fn open_all_reopens_every_project_and_skips_those_not_here() {
     .unwrap();
     let beta = server.scope("beta");
     init::init(&dir.path().join(&beta), &projects_dir, None, server.name()).unwrap();
-    ProjectEntry {
-        root: dir.path().join("gone").to_string_lossy().to_string(),
-        main_branch: "main".to_string(),
-        repo_url: None,
-        state_remote: None,
-    }
-    .save(&projects_dir, "ghost")
-    .unwrap();
+    project_entry(dir.path().join("gone"))
+        .save(&projects_dir, "ghost")
+        .unwrap();
     let husk = dir.path().join("husk");
     std::fs::create_dir_all(husk.join(".pm/messages")).unwrap();
-    ProjectEntry {
-        root: husk.to_string_lossy().to_string(),
-        main_branch: "main".to_string(),
-        repo_url: None,
-        state_remote: None,
-    }
-    .save(&projects_dir, "husk")
-    .unwrap();
+    project_entry(&husk).save(&projects_dir, "husk").unwrap();
     let sessions = [
         tmux::session_name(&alpha, "main"),
         tmux::session_name(&alpha, "login"),

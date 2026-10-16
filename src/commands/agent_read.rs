@@ -218,14 +218,8 @@ fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::messages;
-    use std::path::PathBuf;
+    use crate::testing::bare_project;
     use tempfile::tempdir;
-
-    fn setup_project(dir: &Path) -> PathBuf {
-        let root = dir.to_path_buf();
-        std::fs::create_dir_all(root.join(".pm/features")).unwrap();
-        root
-    }
 
     // --- IndexSpec parsing ---
 
@@ -286,7 +280,7 @@ mod tests {
     #[test]
     fn read_next_unread_implicit_sender() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "fix the bug").unwrap();
@@ -299,7 +293,7 @@ mod tests {
     #[test]
     fn a_brief_reads_as_from_pm_with_nothing_to_reply_to() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         crate::commands::feat_common::enqueue_initial_context(
             &root,
             "login",
@@ -317,7 +311,7 @@ mod tests {
     #[test]
     fn read_no_messages() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let lines = agent_read(&root, "login", "reviewer", None, None).unwrap();
         assert_eq!(lines, vec!["No new messages"]);
@@ -326,7 +320,7 @@ mod tests {
     #[test]
     fn read_advances_cursor() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
@@ -362,7 +356,7 @@ mod tests {
     #[test]
     fn read_with_index_does_not_advance_cursor() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
@@ -389,7 +383,7 @@ mod tests {
         // sender's next message and names the remaining senders, oldest
         // first, so a sequence of bare reads drains the inbox by age.
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         for sender in ["zed", "amy", "mid"] {
@@ -437,7 +431,7 @@ mod tests {
     #[test]
     fn read_explicit_from_still_names_other_pending_senders() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "zed", "a").unwrap();
@@ -456,7 +450,7 @@ mod tests {
         // `pm msg reply` must target the message just read, not a sender
         // that is merely pending.
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send_with_scope(&mdir, "login", "reviewer", "zed", "first", Some("main"))
@@ -478,7 +472,7 @@ mod tests {
     #[test]
     fn read_explicit_from_picks_one_sender() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "a").unwrap();
@@ -492,7 +486,7 @@ mod tests {
     #[test]
     fn read_absolute_index_requires_from() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
@@ -511,7 +505,7 @@ mod tests {
     #[test]
     fn read_absolute_index_with_from() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
@@ -532,7 +526,7 @@ mod tests {
     #[test]
     fn read_relative_plus_peeks_ahead() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
@@ -555,7 +549,7 @@ mod tests {
     #[test]
     fn read_relative_minus_one_is_last_processed() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
@@ -581,7 +575,7 @@ mod tests {
     #[test]
     fn read_relative_minus_two_goes_one_further_back() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
@@ -614,7 +608,7 @@ mod tests {
     #[test]
     fn read_nonexistent_index_reports_friendly() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
@@ -636,7 +630,7 @@ mod tests {
         // we emit the friendly "No new messages from X" form, not the
         // technical "No message [NNN]" form which is reserved for --index.
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();
@@ -649,7 +643,7 @@ mod tests {
     #[test]
     fn read_displays_sender_scope_when_present() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         // Use send_with_scope to set the sender scope
@@ -671,7 +665,7 @@ mod tests {
     #[test]
     fn read_displays_sender_project_when_present() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send_full(
@@ -693,7 +687,7 @@ mod tests {
     #[test]
     fn a_bare_read_takes_the_oldest_sender_when_one_is_in_another_project() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         let mdir = paths::messages_dir(&root);
         messages::send_full(
             &mdir,
@@ -719,7 +713,7 @@ mod tests {
     #[test]
     fn same_named_senders_from_two_scopes_are_told_apart() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         let mdir = paths::messages_dir(&root);
         messages::send_with_scope(&mdir, "main", "main", "implementer", "a", Some("login"))
             .unwrap();
@@ -745,7 +739,7 @@ mod tests {
     #[test]
     fn read_cross_scope_shows_reply_hint() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send_with_scope(
@@ -771,7 +765,7 @@ mod tests {
     #[test]
     fn read_same_scope_no_reply_hint() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "implementer", "reviewer", "same scope").unwrap();
@@ -784,7 +778,7 @@ mod tests {
     #[test]
     fn read_writes_last_read_on_advance() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send_with_scope(
@@ -811,7 +805,7 @@ mod tests {
     #[test]
     fn read_with_index_does_not_write_last_read() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "msg").unwrap();

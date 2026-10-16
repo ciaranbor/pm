@@ -277,8 +277,8 @@ pub(super) fn legacy_vanilla_row_issues(project_root: &Path) -> Result<Vec<Issue
 mod tests {
     use super::*;
     use crate::commands::doctor::test_support::*;
-    use crate::state::agent::{AgentRegistry, AgentType};
-    use crate::testing::TestServer;
+    use crate::state::agent::AgentRegistry;
+    use crate::testing::{TestServer, agent_entry};
     use tempfile::tempdir;
 
     #[test]
@@ -307,13 +307,10 @@ mod tests {
         registry.register(
             "frontend-dev",
             crate::state::agent::AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "frontend-dev".to_string(),
                 active: false,
                 agent_definition: Some("implementer".to_string()),
                 harness: Harness::OpenCode,
-                spawned_at: None,
+                ..agent_entry("frontend-dev")
             },
         );
         registry

@@ -122,9 +122,8 @@ mod tests {
     use crate::commands::agent_spawn::test_support::*;
     use crate::commands::agent_spawn::*;
     use crate::commands::launch_check::Launch;
-    use crate::harness::Harness;
-    use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
-    use crate::testing::TestServer;
+    use crate::state::agent::AgentRegistry;
+    use crate::testing::{TestServer, agent_entry};
     use tempfile::tempdir;
 
     #[test]
@@ -278,18 +277,7 @@ mod tests {
         // so that spawning new windows fails for both.
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::load(&agents_dir, &feature).unwrap();
-        registry.register(
-            "tester",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "tester".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("tester", agent_entry("tester"));
         registry.save(&agents_dir, &feature).unwrap();
 
         // Kill the session entirely — now both spawns will fail because

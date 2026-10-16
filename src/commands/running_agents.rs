@@ -349,7 +349,7 @@ mod tests {
     fn a_window_is_idle_in_the_hook_busy_in_its_harness_and_dead_without_one() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project, &session, "login", "busy");
         server.spawn_idle_fake_agent(&project, &session, "login", "idle");
@@ -377,7 +377,7 @@ mod tests {
     fn a_session_end_reads_dead_while_its_process_is_in_the_pane() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "qa");
         let config = HarnessConfig::default();
@@ -405,7 +405,7 @@ mod tests {
     fn an_idle_marker_needs_its_waiter_and_a_waiter_marks_nothing_idle_by_itself() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         let shell = crate::testing::fake_harness_binary(Harness::ClaudeCode, Path::new("/bin/sh"));
         let hook = format!(
@@ -480,7 +480,7 @@ mod tests {
     fn a_waiter_that_is_not_the_recorded_one_leaves_the_agent_busy() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         let shell = crate::testing::fake_harness_binary(Harness::ClaudeCode, Path::new("/bin/sh"));
         let superseded = format!(

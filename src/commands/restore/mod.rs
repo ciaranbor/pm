@@ -475,7 +475,7 @@ mod husk_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TestServer;
+    use crate::testing::{TestServer, feature_state, project_entry};
     use crate::tmux;
     use tempfile::tempdir;
 
@@ -486,12 +486,7 @@ mod tests {
         let server = TestServer::new();
 
         // Register a project pointing to a non-existent path with no repo_url
-        let entry = ProjectEntry {
-            root: dir.path().join("nonexistent").to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry(dir.path().join("nonexistent"));
         entry.save(&projects_dir, "ghost").unwrap();
 
         let msgs = restore_with_dir(&projects_dir, server.name()).unwrap();
@@ -547,10 +542,9 @@ mod tests {
         // Register with repo_url but don't create the project dir
         let project_path = dir.path().join(&name);
         let entry = ProjectEntry {
-            root: project_path.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
             repo_url: Some(bare_path.to_string_lossy().to_string()),
             state_remote: Some("https://example.com/state.git".to_string()),
+            ..project_entry(&project_path)
         };
         entry.save(&projects_dir, &name).unwrap();
 
@@ -587,10 +581,8 @@ mod tests {
         crate::git::push(&staging, "origin", "main").unwrap();
         let project_path = dir.path().join("checkout");
         ProjectEntry {
-            root: project_path.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
             repo_url: Some(bare_path.to_string_lossy().to_string()),
-            state_remote: None,
+            ..project_entry(&project_path)
         }
         .save(&projects_dir, &name)
         .unwrap();
@@ -762,8 +754,7 @@ mod tests {
 
     #[test]
     fn restore_recreates_missing_feature_worktrees() {
-        use crate::state::feature::{FeatureState, FeatureStatus};
-        use chrono::Utc;
+        use crate::state::feature::FeatureState;
 
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
@@ -789,18 +780,10 @@ mod tests {
 
         // Register feature state in .pm/features/
         let features_dir = paths::features_dir(&project_path);
-        let now = Utc::now();
         let feat_state = FeatureState {
-            status: FeatureStatus::Wip,
-            branch: "feat-login".to_string(),
             worktree: "login".to_string(),
             base: "main".to_string(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            team: Default::default(),
+            ..feature_state("feat-login")
         };
         feat_state.save(&features_dir, "login").unwrap();
 
@@ -829,14 +812,9 @@ mod tests {
         let projects_dir = dir.path().join("projects");
         let server = TestServer::new();
         for name in ["wanted", "other"] {
-            ProjectEntry {
-                root: dir.path().join(name).to_string_lossy().to_string(),
-                main_branch: "main".to_string(),
-                repo_url: None,
-                state_remote: None,
-            }
-            .save(&projects_dir, name)
-            .unwrap();
+            project_entry(dir.path().join(name))
+                .save(&projects_dir, name)
+                .unwrap();
         }
         let global = GlobalConfig::default();
         let restore = |names: &[&str]| {
@@ -863,7 +841,6 @@ mod tests {
     #[test]
     fn restore_skips_worktree_for_merged_feature() {
         use crate::state::feature::{FeatureState, FeatureStatus};
-        use chrono::Utc;
 
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
@@ -878,18 +855,11 @@ mod tests {
 
         // Register a merged feature — its worktree should NOT be recreated
         let features_dir = paths::features_dir(&project_path);
-        let now = Utc::now();
         let feat_state = FeatureState {
             status: FeatureStatus::Merged,
-            branch: "feat-old".to_string(),
             worktree: "old-feat".to_string(),
             base: "main".to_string(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            team: Default::default(),
+            ..feature_state("feat-old")
         };
         feat_state.save(&features_dir, "old-feat").unwrap();
 
@@ -907,8 +877,7 @@ mod tests {
 
     #[test]
     fn restore_warns_on_missing_branch() {
-        use crate::state::feature::{FeatureState, FeatureStatus};
-        use chrono::Utc;
+        use crate::state::feature::FeatureState;
 
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
@@ -920,18 +889,10 @@ mod tests {
 
         // Neither its branch nor its base exists.
         let features_dir = paths::features_dir(&project_path);
-        let now = Utc::now();
         let feat_state = FeatureState {
-            status: FeatureStatus::Wip,
-            branch: "nonexistent-branch".to_string(),
             worktree: "ghost-feat".to_string(),
             base: "gone-base".to_string(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            team: Default::default(),
+            ..feature_state("nonexistent-branch")
         };
         feat_state.save(&features_dir, "ghost-feat").unwrap();
 
@@ -947,8 +908,7 @@ mod tests {
 
     #[test]
     fn restore_creates_a_branch_on_no_remote_from_its_base_stacked_ones_after_theirs() {
-        use crate::state::feature::{FeatureState, FeatureStatus};
-        use chrono::Utc;
+        use crate::state::feature::FeatureState;
 
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
@@ -965,19 +925,10 @@ mod tests {
         let main_tip = git::branch_commit(&main, "main").unwrap().unwrap();
 
         // `api` stacks on `web`, and sorts first; neither branch exists.
-        let now = Utc::now();
         for (feature, base) in [("api", "web"), ("web", "main")] {
             FeatureState {
-                status: FeatureStatus::Wip,
-                branch: feature.to_string(),
-                worktree: feature.to_string(),
                 base: base.to_string(),
-                pr: String::new(),
-                context: String::new(),
-                workflow: None,
-                created: now,
-                last_active: now,
-                team: Default::default(),
+                ..feature_state(feature)
             }
             .save(&paths::features_dir(&project_path), feature)
             .unwrap();

@@ -5,7 +5,7 @@ fn a_launch_that_exits_is_taken_off_its_own_projects_count() {
     use crate::testing::fake_claude;
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (a, a_name) = server.setup_project_with_feature(dir.path(), "login");
+    let (a, _, a_name) = server.setup_project_with_feature(dir.path(), "login");
     let b_name = server.scope("other");
     let b = dir.path().join(&b_name);
     let projects_dir = dir.path().join("registry");

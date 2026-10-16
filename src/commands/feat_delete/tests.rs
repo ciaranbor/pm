@@ -28,13 +28,6 @@ fn main_inbox(project: &Path) -> Vec<String> {
         .collect()
 }
 
-fn delete(server: &TestServer, project_path: &Path, force: bool) {
-    feat_delete(
-        project_path,
-        &TestServer::registry_dir(project_path),
-        "login",
-        force,
-        server.name(),
-    )
-    .unwrap();
+fn delete(server: &TestServer, project_path: &Path, projects_dir: &Path, force: bool) {
+    feat_delete(project_path, projects_dir, "login", force, server.name()).unwrap();
 }

@@ -204,7 +204,7 @@ mod tests {
         fn new(footers: &[&str]) -> Self {
             let server = TestServer::new();
             let dir = tempdir().unwrap();
-            let (project, name) = server.setup_project_with_feature(dir.path(), "login");
+            let (project, _, name) = server.setup_project_with_feature(dir.path(), "login");
             let session = tmux::session_name(&name, "login");
             let received = project.join(".pm/received");
             let bin = project.join(".pm/bin");

@@ -67,18 +67,8 @@ pub fn delete_named(
 mod tests {
     use super::*;
     use crate::error::PmError;
+    use crate::testing::register_project;
     use tempfile::tempdir;
-
-    fn register(projects_dir: &Path, name: &str, root: &Path) {
-        ProjectEntry {
-            root: root.to_string_lossy().into_owned(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        }
-        .save(projects_dir, name)
-        .unwrap();
-    }
 
     #[test]
     fn deleting_a_husk_unregisters_it_and_removes_its_root() {
@@ -87,7 +77,7 @@ mod tests {
         let husk = dir.path().join("husk");
         std::fs::create_dir_all(husk.join(".pm/messages/main")).unwrap();
         crate::git::init_repo(&paths::pm_dir(&husk)).unwrap();
-        register(&projects_dir, "husk", &husk);
+        register_project(&projects_dir, "husk", &husk);
 
         let deleted = delete_named(&projects_dir, "husk", false, None, |pending| {
             assert_eq!((pending.project, pending.main), ("husk", None));
@@ -112,8 +102,8 @@ mod tests {
         let root = dir.path().join("mixed");
         std::fs::create_dir_all(paths::pm_dir(&root)).unwrap();
         std::fs::write(root.join("notes.txt"), "mine").unwrap();
-        register(&projects_dir, "mixed", &root);
-        register(&projects_dir, "gone", &dir.path().join("gone"));
+        register_project(&projects_dir, "mixed", &root);
+        register_project(&projects_dir, "gone", &dir.path().join("gone"));
 
         let deleted = delete_named(&projects_dir, "mixed", false, None, |_| Ok(true))
             .unwrap()
@@ -137,7 +127,7 @@ mod tests {
         let projects_dir = dir.path().join("projects");
         let husk = dir.path().join("husk");
         std::fs::create_dir_all(paths::pm_dir(&husk)).unwrap();
-        register(&projects_dir, "husk", &husk);
+        register_project(&projects_dir, "husk", &husk);
 
         let deleted = delete_named(&projects_dir, "husk", false, None, |_| Ok(false)).unwrap();
 

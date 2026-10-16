@@ -164,7 +164,7 @@ pub fn feat_info(project_root: &Path, projects_dir: &Path, name: &str) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{feat_new, init};
+    use crate::commands::feat_new;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -172,9 +172,7 @@ mod tests {
     fn feat_info_shows_all_fields() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
         feat_new::feat_new(&feat_new::FeatNewParams {
             project_root: &project_path,
             projects_dir: &projects_dir,
@@ -217,8 +215,8 @@ mod tests {
     fn feat_info_shows_a_paused_rebase() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let rebase_line = |lines: Vec<String>| lines.into_iter().find(|l| l.starts_with("rebase:"));
         TestServer::add_feature_commit(&project_path, "login");
         assert_eq!(
@@ -243,9 +241,7 @@ mod tests {
         crate::git::init_bare(&bare_path).unwrap();
 
         // Init project (creates a real git repo at project_path/main)
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         let main_repo = paths::main_worktree(&project_path);
 
@@ -310,9 +306,7 @@ mod tests {
     fn feat_info_nonexistent_returns_error() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         let result = feat_info(&project_path, &projects_dir, "nonexistent");
         assert!(result.is_err());
@@ -322,16 +316,7 @@ mod tests {
     fn feat_info_omits_empty_optional_fields() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-            &project_path,
-            &projects_dir,
-            "beta",
-            server.name(),
-        ))
-        .unwrap();
+        let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "beta");
 
         let features_dir = paths::features_dir(&project_path);
         let mut state = FeatureState::load(&features_dir, "beta").unwrap();
@@ -349,16 +334,8 @@ mod tests {
     fn feat_info_shows_divergence() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-            &project_path,
-            &projects_dir,
-            "diverge",
-            server.name(),
-        ))
-        .unwrap();
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "diverge");
 
         // Add a commit on the feature branch
         let wt_path = project_path.join("diverge");
@@ -378,16 +355,8 @@ mod tests {
     fn feat_info_shows_up_to_date_divergence() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-            &project_path,
-            &projects_dir,
-            "synced",
-            server.name(),
-        ))
-        .unwrap();
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "synced");
 
         let lines = feat_info(&project_path, &projects_dir, "synced").unwrap();
         let output = lines.join("\n");
@@ -401,16 +370,8 @@ mod tests {
     fn feat_info_shows_behind_divergence() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-            &project_path,
-            &projects_dir,
-            "behind",
-            server.name(),
-        ))
-        .unwrap();
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "behind");
 
         // Add a commit on main (the feature is now behind)
         let main_repo = paths::main_worktree(&project_path);
@@ -430,16 +391,7 @@ mod tests {
     fn feat_info_shows_ahead_and_behind() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-        feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-            &project_path,
-            &projects_dir,
-            "both",
-            server.name(),
-        ))
-        .unwrap();
+        let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "both");
 
         // Add a commit on the feature branch
         let wt_path = project_path.join("both");

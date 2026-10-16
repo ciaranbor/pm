@@ -305,8 +305,8 @@ mod tests {
     fn fix_recreates_missing_tmux_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session_name = tmux::session_name(&project_name, "login");
 
         tmux::kill_session(server.name(), &session_name).unwrap();
@@ -328,8 +328,8 @@ mod tests {
     fn fix_cleans_up_stuck_initializing() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         let features_dir = paths::features_dir(&project_path);
         let mut state = FeatureState::load(&features_dir, "login").unwrap();
@@ -362,8 +362,8 @@ mod tests {
     fn fix_removes_orphaned_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Remove worktree, branch, and tmux session — leaving only the state file
         let main_repo = paths::main_worktree(&project_path);
@@ -390,8 +390,8 @@ mod tests {
     fn fix_recreates_missing_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Remove worktree directory — branch still exists, so doctor can recreate
         let main_repo = paths::main_worktree(&project_path);
@@ -415,8 +415,8 @@ mod tests {
     fn fix_summary_shows_fixed_count() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 

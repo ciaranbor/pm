@@ -108,7 +108,7 @@ mod tests {
     #[test]
     fn a_feature_agent_may_patch_its_own_worktree_but_not_main() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         let feature = paths::scope_worktree(&project, "login");
         let main = paths::main_worktree(&project);
@@ -133,7 +133,7 @@ mod tests {
     #[test]
     fn a_main_agent_may_patch_main() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&project);
         let payload = patch_into(&main, Path::new("README.md"));
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn a_call_that_is_not_a_patch_passes() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         let feature = paths::scope_worktree(&project, "login");
         let shell = json!({

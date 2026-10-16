@@ -161,19 +161,13 @@ fn persist_state_remote_to_registry(project_root: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use crate::commands::state_cmd::test_support::*;
+    use crate::testing::bare_project;
     use tempfile::tempdir;
-
-    fn setup_project(dir: &std::path::Path) -> std::path::PathBuf {
-        let root = dir.to_path_buf();
-        std::fs::create_dir_all(root.join(".pm").join("features")).unwrap();
-        std::fs::create_dir_all(paths::main_worktree(&root)).unwrap();
-        root
-    }
 
     #[test]
     fn init_creates_git_repo_in_pm_dir() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let msg = init(&root).unwrap();
         assert!(msg.contains("Initialised"));
@@ -183,7 +177,7 @@ mod tests {
     #[test]
     fn init_is_idempotent() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         init(&root).unwrap();
         let msg = init(&root).unwrap();
@@ -203,7 +197,7 @@ mod tests {
     #[test]
     fn status_shows_clean_after_init() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         init(&root).unwrap();
         let msg = status(&root).unwrap();
@@ -213,7 +207,7 @@ mod tests {
     #[test]
     fn status_shows_changes_after_modification() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         init(&root).unwrap();
 
@@ -227,7 +221,7 @@ mod tests {
     #[test]
     fn status_errors_without_init() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let result = status(&root);
         assert!(result.is_err());
@@ -236,7 +230,7 @@ mod tests {
     #[test]
     fn remote_sets_origin() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         let msg = remote(&root, Some("https://example.com/state.git")).unwrap();
@@ -249,7 +243,7 @@ mod tests {
     #[test]
     fn remote_errors_if_already_set() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         remote(&root, Some("https://example.com/state.git")).unwrap();
@@ -260,7 +254,7 @@ mod tests {
     #[test]
     fn push_without_remote_commits_locally() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         // Make a change with no remote configured.
@@ -278,7 +272,7 @@ mod tests {
     #[test]
     fn push_without_remote_no_changes_is_noop() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         let msg = push(&root).unwrap();
@@ -289,7 +283,7 @@ mod tests {
     #[test]
     fn pull_without_remote_is_noop() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         let msg = pull(&root).unwrap();
@@ -299,7 +293,7 @@ mod tests {
     #[test]
     fn status_without_remote_notes_it() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         let msg = status(&root).unwrap();
@@ -309,7 +303,7 @@ mod tests {
     #[test]
     fn push_with_configured_remote_surfaces_real_errors() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         // Point origin at a remote that doesn't exist — push must fail.
@@ -326,7 +320,7 @@ mod tests {
     #[test]
     fn push_commits_and_pushes() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         // Create a bare remote
@@ -350,7 +344,7 @@ mod tests {
     #[test]
     fn push_without_changes_still_pushes() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         // Create a bare remote
@@ -371,7 +365,7 @@ mod tests {
     #[test]
     fn pull_fetches_remote_changes() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         // Create bare remote and push
@@ -402,7 +396,7 @@ mod tests {
     #[test]
     fn pull_commits_dirty_state_before_pulling() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
 
         // Create bare remote and push
@@ -431,7 +425,7 @@ mod tests {
     #[test]
     fn init_commits_existing_state() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         // Create some state before init
         std::fs::write(
@@ -489,7 +483,7 @@ mod tests {
     #[test]
     fn init_with_remote_on_master_only_remote_tracks_master() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         let bare = dir.path().join("state-remote.git");
         create_populated_bare_on(&bare, "master");
 
@@ -501,7 +495,7 @@ mod tests {
     #[test]
     fn init_with_remote_on_existing_repo_master_only_remote_tracks_master() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         init(&root).unwrap();
         let bare = dir.path().join("state-remote.git");
         create_populated_bare_on(&bare, "master");
@@ -516,7 +510,7 @@ mod tests {
     #[test]
     fn init_with_remote_empty_bare() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         // Empty bare remote — no content to pull
         let bare = dir.path().join("state-remote.git");
@@ -537,7 +531,7 @@ mod tests {
     #[test]
     fn init_with_remote_populated_bare() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         // Populated remote — has content
         let bare = dir.path().join("state-remote.git");
@@ -559,7 +553,7 @@ mod tests {
     #[test]
     fn init_with_remote_on_existing_repo_without_remote() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         // Init first without remote
         init(&root).unwrap();
@@ -578,7 +572,7 @@ mod tests {
     #[test]
     fn init_with_remote_on_existing_repo_populated_bare() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         // Init first without remote
         init(&root).unwrap();
@@ -602,7 +596,7 @@ mod tests {
     #[test]
     fn init_with_remote_errors_when_origin_already_set() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         // Init with remote
         let bare = dir.path().join("state-remote.git");

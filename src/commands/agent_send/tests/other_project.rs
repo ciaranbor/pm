@@ -5,7 +5,6 @@
 use super::*;
 use crate::commands::agent_read::agent_read;
 use crate::commands::msg_reply::msg_reply;
-use crate::state::project::ProjectEntry;
 use crate::state::runtime::{self, Waiting, WaitingKind};
 
 fn home<'a>(root: &'a Path, scope: &'a str) -> Option<Home<'a>> {
@@ -28,14 +27,7 @@ fn name_of(root: &Path) -> String {
 }
 
 fn register(projects_dir: &Path, root: &Path) {
-    ProjectEntry {
-        root: root.to_string_lossy().into_owned(),
-        main_branch: "main".to_string(),
-        repo_url: None,
-        state_remote: None,
-    }
-    .save(projects_dir, &name_of(root))
-    .unwrap();
+    crate::testing::register_project(projects_dir, &name_of(root), root);
 }
 
 #[test]

@@ -382,8 +382,7 @@ mod tests {
     }
 
     fn setup_project(dir: &std::path::Path) -> std::path::PathBuf {
-        let root = dir.to_path_buf();
-        std::fs::create_dir_all(root.join(".pm/features")).unwrap();
+        let root = crate::testing::bare_project(dir);
         std::fs::write(root.join(".pm/features/login.toml"), "").unwrap();
         std::fs::create_dir_all(paths::agents_dir(&root)).unwrap();
         std::fs::write(

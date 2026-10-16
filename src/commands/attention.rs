@@ -1299,7 +1299,7 @@ mod tests {
     fn a_marker_refines_only_an_agent_its_window_reads_as_busy() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project, &session, "login", "asking");
         server.spawn_fake_agent(&project, &session, "login", "starting");
@@ -1409,7 +1409,7 @@ mod tests {
     fn a_stopped_loop_shows_its_reason_over_any_marker_but_a_dialog() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project, &session, "login", "qa");
         runtime::trip_loop(&project, "login", "qa", "inbox unreadable").unwrap();
@@ -1445,7 +1445,7 @@ mod tests {
     fn background_work_is_not_working_and_dates_from_the_oldest_wait() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         let started = |agent: &str, hours| {
             let target = server.spawn_fake_agent(&project, &session, "login", agent);
@@ -1507,7 +1507,7 @@ mod tests {
     fn the_project_snapshot_reads_each_agents_window() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
         server.spawn_dead_fake_agent(&project, &session, "login", "reviewer");
@@ -1542,7 +1542,7 @@ mod tests {
     fn an_agent_without_a_window_is_dead_only_while_its_session_is_open() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         let window = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
         tmux::kill_window(server.name(), &window).unwrap();

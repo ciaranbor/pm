@@ -38,7 +38,6 @@ pub fn feat_pr_ready(project_root: &Path, name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::init;
     use crate::testing::TestServer;
     use tempfile::tempdir;
 
@@ -46,9 +45,7 @@ mod tests {
     fn pr_ready_fails_for_nonexistent_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let (project_path, _, _) = server.setup_project(dir.path());
 
         let result = feat_pr_ready(&project_path, "nonexistent");
         assert!(result.is_err());
@@ -58,9 +55,7 @@ mod tests {
     fn pr_ready_fails_when_no_pr_linked() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let project_path = dir.path().join(server.scope("myapp"));
-        let projects_dir = dir.path().join("registry");
-        init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         crate::commands::feat_new::feat_new(
             &crate::commands::feat_new::FeatNewParams::with_defaults(

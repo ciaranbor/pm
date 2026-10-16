@@ -222,7 +222,7 @@ mod tests {
     use crate::commands::doctor::{Depth, Finding, diagnose, doctor};
     use crate::harness::Harness;
     use crate::state::project::HarnessConfig;
-    use crate::testing::TestServer;
+    use crate::testing::{TestServer, agent_entry};
     use crate::tmux;
     use tempfile::tempdir;
 
@@ -232,13 +232,9 @@ mod tests {
         let server = TestServer::new();
         let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
         let entry = |harness| crate::state::agent::AgentEntry {
-            agent_type: AgentType::Agent,
             session_id: "ses_1".to_string(),
-            window_name: "reviewer".to_string(),
-            active: true,
-            agent_definition: None,
             harness,
-            spawned_at: None,
+            ..agent_entry("reviewer")
         };
         let opencode = entry(Harness::OpenCode);
         let native = entry(Harness::ClaudeCode);
@@ -324,20 +320,15 @@ mod tests {
     fn unmigrated_default_agent_is_flagged_and_fix_migrates_it() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
         registry.register(
             "default",
             crate::state::agent::AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "default".to_string(),
                 active: false,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("default")
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -378,8 +369,8 @@ mod tests {
     fn detects_dead_agent_window_in_existing_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Register an agent as active, but don't create its window
         let agents_dir = paths::agents_dir(&project_path);
@@ -387,13 +378,8 @@ mod tests {
         registry.register(
             "reviewer",
             crate::state::agent::AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-                agent_definition: None,
                 harness: crate::harness::Harness::OpenCode,
-                spawned_at: None,
+                ..agent_entry("reviewer")
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -425,24 +411,13 @@ mod tests {
     fn fix_respawns_dead_agent() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Register an agent as active, but don't create its window
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::default();
-        registry.register(
-            "reviewer",
-            crate::state::agent::AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: crate::harness::Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("reviewer", agent_entry("reviewer"));
         registry.save(&agents_dir, "login").unwrap();
 
         let lines = doctor(&project_path, &projects_dir, true, server.name())
@@ -474,21 +449,16 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::default();
         registry.register(
             "reviewer",
             crate::state::agent::AgentEntry {
-                agent_type: AgentType::Agent,
                 session_id: "cc-session".to_string(),
-                window_name: "reviewer".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("reviewer")
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -517,8 +487,8 @@ mod tests {
     fn healthy_agent_not_flagged() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Register an agent AND create its window with a non-shell process
         let session_name = tmux::session_name(&project_name, "login");
@@ -534,8 +504,8 @@ mod tests {
     fn running_agent_launched_with_what_has_changed_is_flagged() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session_name = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
         crate::state::runtime::write_launch_stamp(&project_path, "login", "reviewer", "old")
@@ -559,8 +529,8 @@ mod tests {
     fn running_opencode_agent_whose_plugin_never_loaded_is_flagged_once_past_grace() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session_name = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
 
@@ -616,8 +586,8 @@ mod tests {
     fn an_open_window_whose_harness_exited_is_flagged_instead_of_its_missing_session() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session_name = tmux::session_name(&project_name, "login");
         server.spawn_dead_fake_agent(&project_path, &session_name, "login", "reviewer");
         let agents_dir = paths::agents_dir(&project_path);
@@ -650,8 +620,8 @@ mod tests {
     fn running_agent_whose_session_never_started_is_flagged_once_past_its_own_grace_period() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session_name = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
 

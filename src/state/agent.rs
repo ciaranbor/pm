@@ -206,6 +206,7 @@ impl AgentRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::agent_entry;
     use tempfile::tempdir;
 
     #[test]
@@ -240,13 +241,8 @@ mod tests {
 
     fn make_agent(session_id: &str) -> AgentEntry {
         AgentEntry {
-            agent_type: AgentType::Agent,
             session_id: session_id.to_string(),
-            window_name: "reviewer".to_string(),
-            active: true,
-            agent_definition: None,
-            harness: Harness::ClaudeCode,
-            spawned_at: None,
+            ..agent_entry("reviewer")
         }
     }
 
@@ -301,12 +297,8 @@ mod tests {
             "ciaranorourke",
             AgentEntry {
                 agent_type: AgentType::User,
-                session_id: String::new(),
-                window_name: String::new(),
                 active: false,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("")
             },
         );
 
@@ -381,13 +373,8 @@ mod tests {
         registry.register(
             "frontend-dev",
             AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "frontend-dev".to_string(),
-                active: true,
                 agent_definition: Some("implementer".to_string()),
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("frontend-dev")
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -402,15 +389,7 @@ mod tests {
     fn registry_agent_definition_omitted_when_none() {
         // Default unaliased entries should not write the field, keeping
         // existing on-disk TOML clean.
-        let registry_entry = AgentEntry {
-            agent_type: AgentType::Agent,
-            session_id: String::new(),
-            window_name: "implementer".to_string(),
-            active: true,
-            agent_definition: None,
-            harness: Harness::ClaudeCode,
-            spawned_at: None,
-        };
+        let registry_entry = agent_entry("implementer");
         let toml = toml::to_string_pretty(&registry_entry).unwrap();
         assert!(
             !toml.contains("agent_definition"),
@@ -462,12 +441,8 @@ active = true
             "ciaranorourke",
             AgentEntry {
                 agent_type: AgentType::User,
-                session_id: String::new(),
-                window_name: String::new(),
                 active: false,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("")
             },
         );
 

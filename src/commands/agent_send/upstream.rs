@@ -44,8 +44,7 @@ pub fn resolve_upstream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::feature::FeatureStatus;
-    use chrono::Utc;
+    use crate::testing::feature_state;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -56,18 +55,10 @@ mod tests {
     }
 
     fn save_feature(root: &Path, name: &str, branch: &str, base: &str) {
-        let now = Utc::now();
         let state = FeatureState {
-            status: FeatureStatus::Wip,
-            branch: branch.to_string(),
             worktree: name.to_string(),
             base: base.to_string(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            team: Default::default(),
+            ..feature_state(branch)
         };
         state.save(&root.join(".pm/features"), name).unwrap();
     }

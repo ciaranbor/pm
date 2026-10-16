@@ -418,7 +418,7 @@ mod tests {
         fn new(harness: Harness) -> Self {
             let server = TestServer::new();
             let dir = tempdir().unwrap();
-            let (project, name) = server.setup_project_with_feature(dir.path(), "login");
+            let (project, _, name) = server.setup_project_with_feature(dir.path(), "login");
             let session = tmux::session_name(&name, "login");
             let (target, received) =
                 server.spawn_recording_agent(&project, &session, "login", "implementer", harness);
@@ -576,7 +576,7 @@ mod tests {
     fn a_draft_at_the_keyboard_is_left_untouched() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&name, "login");
         let target = server.spawn_prompting_fake_agent(&project, &session, "login", "implementer");
         server.wait_for_pane_text(&target, "❯");
@@ -594,7 +594,7 @@ mod tests {
     fn a_pane_without_its_harness_gets_nothing() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&name, "login");
         let target = server.spawn_dead_fake_agent(&project, &session, "login", "implementer");
 

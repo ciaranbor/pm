@@ -82,6 +82,7 @@ pub fn backfill_with_dir(projects_dir: &Path) -> Result<Vec<String>> {
 mod tests {
     use super::*;
     use crate::state::project::ProjectEntry;
+    use crate::testing::project_entry;
     use tempfile::tempdir;
 
     /// Create a project dir with a main worktree that has a git origin remote.
@@ -108,12 +109,7 @@ mod tests {
 
         setup_project_with_origin(&project_root, "https://github.com/user/myapp.git");
 
-        let entry = ProjectEntry {
-            root: project_root.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry(&project_root);
         entry.save(&projects_dir, "myapp").unwrap();
 
         let msgs = backfill_with_dir(&projects_dir).unwrap();
@@ -135,12 +131,7 @@ mod tests {
         std::fs::create_dir_all(paths::main_worktree(&project_root)).unwrap();
         setup_pm_with_remote(&project_root, "https://github.com/user/myapp-pm-state.git");
 
-        let entry = ProjectEntry {
-            root: project_root.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry(&project_root);
         entry.save(&projects_dir, "myapp").unwrap();
 
         let msgs = backfill_with_dir(&projects_dir).unwrap();
@@ -165,10 +156,9 @@ mod tests {
         setup_project_with_origin(&project_root, "https://github.com/user/myapp.git");
 
         let entry = ProjectEntry {
-            root: project_root.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
             repo_url: Some("https://existing.com/repo.git".to_string()),
             state_remote: Some("https://existing.com/state.git".to_string()),
+            ..project_entry(&project_root)
         };
         entry.save(&projects_dir, "myapp").unwrap();
 
@@ -191,12 +181,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
 
-        let entry = ProjectEntry {
-            root: "/nonexistent/path/myapp".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry("/nonexistent/path/myapp");
         entry.save(&projects_dir, "myapp").unwrap();
 
         let msgs = backfill_with_dir(&projects_dir).unwrap();

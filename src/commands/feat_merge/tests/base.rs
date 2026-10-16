@@ -35,7 +35,7 @@ fn merge_legacy_feature_on_master_default_project_lands_on_master() {
 fn merge_stacked_feature_after_parent_gone_refuses_with_hint() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, projects_dir) = server.setup_orphaned_child(dir.path());
+    let (project_path, projects_dir, _) = server.setup_orphaned_child(dir.path());
 
     let err = feat_merge(&project_path, &projects_dir, "child", false, server.name()).unwrap_err();
 
@@ -83,7 +83,7 @@ fn merge_feature_based_on_a_non_pm_branch_refuses_with_adopt_hint() {
 fn merge_stacked_feature_merges_into_parent_worktree() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "parent");
 
     // Add a commit to parent
     let parent_wt = project_path.join("parent");
@@ -94,7 +94,7 @@ fn merge_stacked_feature_merges_into_parent_worktree() {
     // Create stacked feature based on parent
     feat_new::feat_new(&feat_new::FeatNewParams {
         project_root: &project_path,
-        projects_dir: &TestServer::registry_dir(&project_path),
+        projects_dir: &projects_dir,
         name: "child",
         name_override: None,
         context: None,
@@ -109,14 +109,7 @@ fn merge_stacked_feature_merges_into_parent_worktree() {
     git::stage_file(&child_wt, "child.txt").unwrap();
     git::commit(&child_wt, "child commit").unwrap();
 
-    feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "child",
-        true,
-        server.name(),
-    )
-    .unwrap();
+    feat_merge(&project_path, &projects_dir, "child", true, server.name()).unwrap();
 
     // Child's changes should appear in parent worktree, not main
     assert!(parent_wt.join("child.txt").exists());
@@ -128,11 +121,11 @@ fn merge_stacked_feature_merges_into_parent_worktree() {
 fn merge_stacked_feature_cleans_up_by_default() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "parent");
 
     feat_new::feat_new(&feat_new::FeatNewParams {
         project_root: &project_path,
-        projects_dir: &TestServer::registry_dir(&project_path),
+        projects_dir: &projects_dir,
         name: "child",
         name_override: None,
         context: None,
@@ -147,14 +140,7 @@ fn merge_stacked_feature_cleans_up_by_default() {
     git::stage_file(&child_wt, "child.txt").unwrap();
     git::commit(&child_wt, "child commit").unwrap();
 
-    feat_merge(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "child",
-        false,
-        server.name(),
-    )
-    .unwrap();
+    feat_merge(&project_path, &projects_dir, "child", false, server.name()).unwrap();
 
     // Cleaned up
     assert!(!project_path.join("child").exists());

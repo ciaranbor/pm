@@ -61,21 +61,15 @@ pub fn agent_list(project_root: &Path, feature: &str, active_only: bool) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::Harness;
     use crate::messages;
-    use crate::state::agent::{AgentEntry, AgentType};
+    use crate::state::agent::AgentEntry;
+    use crate::testing::{agent_entry, bare_project};
     use tempfile::tempdir;
-
-    fn setup_project(dir: &std::path::Path) {
-        let root = dir.to_path_buf();
-        let pm_dir = root.join(".pm");
-        std::fs::create_dir_all(pm_dir.join("features")).unwrap();
-    }
 
     #[test]
     fn list_no_agents_returns_no_agents() {
         let dir = tempdir().unwrap();
-        setup_project(dir.path());
+        bare_project(dir.path());
 
         let lines = agent_list(dir.path(), "login", false).unwrap();
         assert_eq!(lines, vec!["No agents"]);
@@ -84,34 +78,18 @@ mod tests {
     #[test]
     fn list_from_registry_shows_status() {
         let dir = tempdir().unwrap();
-        setup_project(dir.path());
+        bare_project(dir.path());
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::default();
         // reviewer: active
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("reviewer", agent_entry("reviewer"));
         // tester: inactive
         registry.register(
             "tester",
             AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "tester".to_string(),
                 active: false,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("tester")
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -132,7 +110,7 @@ mod tests {
     #[test]
     fn list_shows_alias_for_aliased_agents() {
         let dir = tempdir().unwrap();
-        setup_project(dir.path());
+        bare_project(dir.path());
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::default();
@@ -140,28 +118,12 @@ mod tests {
         registry.register(
             "frontend-dev",
             AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "frontend-dev".to_string(),
-                active: true,
                 agent_definition: Some("implementer".to_string()),
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("frontend-dev")
             },
         );
         // Non-aliased
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("reviewer", agent_entry("reviewer"));
         registry.save(&agents_dir, "login").unwrap();
 
         let lines = agent_list(dir.path(), "login", false).unwrap();
@@ -187,22 +149,11 @@ mod tests {
     #[test]
     fn list_shows_harness() {
         let dir = tempdir().unwrap();
-        setup_project(dir.path());
+        bare_project(dir.path());
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::default();
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("reviewer", agent_entry("reviewer"));
         registry.save(&agents_dir, "login").unwrap();
 
         let lines = agent_list(dir.path(), "login", false).unwrap();
@@ -212,22 +163,11 @@ mod tests {
     #[test]
     fn list_shows_unread_counts() {
         let dir = tempdir().unwrap();
-        setup_project(dir.path());
+        bare_project(dir.path());
 
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::default();
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("reviewer", agent_entry("reviewer"));
         registry.save(&agents_dir, "login").unwrap();
 
         let mdir = paths::messages_dir(dir.path());

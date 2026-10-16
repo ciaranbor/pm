@@ -193,19 +193,12 @@ impl ProjectConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::project_config;
     use tempfile::tempdir;
 
     #[test]
     fn project_config_roundtrip_toml() {
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: "myapp".to_string(),
-                max_features: None,
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
+        let config = project_config("myapp");
         let serialized = toml::to_string_pretty(&config).unwrap();
         let deserialized: ProjectConfig = toml::from_str(&serialized).unwrap();
         assert_eq!(config, deserialized);
@@ -349,15 +342,7 @@ default = "implementer"
         let dir = tempdir().unwrap();
         let pm_dir = dir.path().join(".pm");
 
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: "myapp".to_string(),
-                max_features: None,
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
+        let config = project_config("myapp");
         config.save(&pm_dir).unwrap();
 
         let loaded = ProjectConfig::load(&pm_dir).unwrap();

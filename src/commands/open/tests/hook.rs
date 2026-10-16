@@ -4,10 +4,7 @@ use super::*;
 fn open_backfills_hook_scripts_for_existing_projects() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+    let (project_path, projects_dir, _name) = server.setup_project(dir.path());
 
     // Simulate a pre-hooks project by removing the bootstrapped hooks
     std::fs::remove_dir_all(project_path.join(".pm/hooks")).unwrap();
@@ -24,17 +21,7 @@ fn open_backfills_hook_scripts_for_existing_projects() {
 fn open_runs_restore_hook_for_new_sessions() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-    feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-        &project_path,
-        &projects_dir,
-        "login",
-        server.name(),
-    ))
-    .unwrap();
+    let (project_path, projects_dir, name) = server.setup_project_with_feature(dir.path(), "login");
 
     // Create a restore hook
     let restore_path = project_path.join(hooks::RESTORE_PATH);
@@ -65,10 +52,7 @@ fn open_runs_restore_hook_for_new_sessions() {
 fn open_skips_restore_hook_for_existing_sessions() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+    let (project_path, projects_dir, name) = server.setup_project(dir.path());
 
     // Create a restore hook
     let restore_path = project_path.join(hooks::RESTORE_PATH);

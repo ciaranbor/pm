@@ -12,7 +12,7 @@ use crate::commands::feat_status::feat_status;
 use crate::state::devices::Devices;
 use crate::state::feature::{FeatureState, Progress};
 use crate::state::paths;
-use crate::testing::TestServer;
+use crate::testing::{TestServer, agent_entry};
 
 pub(super) struct Fixture {
     _dir: TempDir,
@@ -25,9 +25,10 @@ pub(super) struct Fixture {
 pub(super) fn fixture() -> Fixture {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+    let (project, projects_dir, project_name) =
+        server.setup_project_with_feature(dir.path(), "login");
     let mut config = Config::new(
-        TestServer::registry_dir(&project),
+        projects_dir.clone(),
         ServeFiles::new(dir.path().into(), dir.path().into()),
         server.name(),
     );
@@ -319,7 +320,7 @@ fn an_event_stream_sends_changes_transitions_and_heartbeats_and_every_reply_its_
 /// recording the session's transcript path as the SessionStart hook does.
 /// Returns that path; nothing is written there.
 fn register_conversation(project: &std::path::Path, agent: &str, session_id: &str) -> PathBuf {
-    use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+    use crate::state::agent::{AgentEntry, AgentRegistry};
     use crate::state::runtime::{self, SessionPath};
     let transcript = project.join(format!("{session_id}.jsonl"));
     let agents_dir = paths::agents_dir(project);
@@ -327,13 +328,8 @@ fn register_conversation(project: &std::path::Path, agent: &str, session_id: &st
     registry.register(
         agent,
         AgentEntry {
-            agent_type: AgentType::Agent,
             session_id: session_id.to_string(),
-            window_name: agent.to_string(),
-            active: true,
-            agent_definition: None,
-            harness: crate::harness::Harness::ClaudeCode,
-            spawned_at: None,
+            ..agent_entry(agent)
         },
     );
     registry.save(&agents_dir, "login").unwrap();
@@ -1420,7 +1416,7 @@ fn a_device_unpairs_itself_and_only_itself() {
 #[test]
 fn an_agents_mode_is_served_with_its_harnesses_modes_and_set_only_to_one_of_them() {
     use crate::harness::Harness;
-    use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+    use crate::state::agent::{AgentEntry, AgentRegistry};
     let f = fixture();
     let phone = pair(&f.config, "phone");
     let session = crate::tmux::session_name(&f.project_name, "login");
@@ -1433,13 +1429,8 @@ fn an_agents_mode_is_served_with_its_harnesses_modes_and_set_only_to_one_of_them
     registry.register(
         "qa",
         AgentEntry {
-            agent_type: AgentType::Agent,
-            session_id: String::new(),
-            window_name: "qa".into(),
-            active: true,
-            agent_definition: None,
             harness: Harness::OpenCode,
-            spawned_at: None,
+            ..agent_entry("qa")
         },
     );
     registry.save(&agents_dir, "login").unwrap();

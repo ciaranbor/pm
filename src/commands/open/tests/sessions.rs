@@ -6,17 +6,7 @@ fn open_succeeds_with_orphaned_feature_state() {
     // don't block restoring the rest of the project.
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-    feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-        &project_path,
-        &projects_dir,
-        "login",
-        server.name(),
-    ))
-    .unwrap();
+    let (project_path, projects_dir, name) = server.setup_project_with_feature(dir.path(), "login");
 
     // Orphan the feature, then kill the main session
     let main_repo = paths::main_worktree(&project_path);
@@ -39,10 +29,7 @@ fn open_succeeds_with_orphaned_feature_state() {
 fn open_creates_main_session_when_missing() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+    let (project_path, projects_dir, name) = server.setup_project(dir.path());
 
     // Kill the main session that init created
     tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
@@ -57,10 +44,7 @@ fn open_creates_main_session_when_missing() {
 fn open_skips_existing_main_session() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+    let (project_path, projects_dir, name) = server.setup_project(dir.path());
 
     // Main session already exists from init — open should not fail
     assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "main")).unwrap());
@@ -74,17 +58,7 @@ fn open_skips_existing_main_session() {
 fn open_recreates_missing_feature_sessions() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-    feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-        &project_path,
-        &projects_dir,
-        "login",
-        server.name(),
-    ))
-    .unwrap();
+    let (project_path, projects_dir, name) = server.setup_project_with_feature(dir.path(), "login");
 
     // Kill the feature session
     tmux::kill_session(server.name(), &tmux::session_name(&name, "login")).unwrap();
@@ -99,17 +73,7 @@ fn open_recreates_missing_feature_sessions() {
 fn open_skips_existing_feature_sessions() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-    feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-        &project_path,
-        &projects_dir,
-        "login",
-        server.name(),
-    ))
-    .unwrap();
+    let (project_path, projects_dir, name) = server.setup_project_with_feature(dir.path(), "login");
 
     // Feature session exists — open should not fail
     assert!(tmux::has_session(server.name(), &tmux::session_name(&name, "login")).unwrap());
@@ -123,17 +87,7 @@ fn open_skips_existing_feature_sessions() {
 fn open_skips_merged_features() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-    feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-        &project_path,
-        &projects_dir,
-        "login",
-        server.name(),
-    ))
-    .unwrap();
+    let (project_path, projects_dir, name) = server.setup_project_with_feature(dir.path(), "login");
 
     // Manually set feature status to merged
     let features_dir = paths::features_dir(&project_path);
@@ -154,10 +108,7 @@ fn open_skips_merged_features() {
 fn open_with_no_features_only_creates_main() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+    let (project_path, projects_dir, name) = server.setup_project(dir.path());
 
     // Kill main
     tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
@@ -177,10 +128,7 @@ fn open_with_no_features_only_creates_main() {
 fn open_errors_when_main_worktree_missing() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+    let (project_path, projects_dir, name) = server.setup_project(dir.path());
 
     // Kill session and delete the main worktree
     tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();
@@ -194,17 +142,7 @@ fn open_errors_when_main_worktree_missing() {
 fn open_skips_feature_with_missing_worktree() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-    feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-        &project_path,
-        &projects_dir,
-        "login",
-        server.name(),
-    ))
-    .unwrap();
+    let (project_path, projects_dir, name) = server.setup_project_with_feature(dir.path(), "login");
     feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
         &project_path,
         &projects_dir,
@@ -229,10 +167,7 @@ fn open_skips_feature_with_missing_worktree() {
 fn open_returns_zero_counts_when_nothing_restored() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
+    let (project_path, projects_dir, _name) = server.setup_project(dir.path());
 
     // All sessions already exist from init
     let result = open(&project_path, &projects_dir, server.name()).unwrap();
@@ -244,17 +179,7 @@ fn open_returns_zero_counts_when_nothing_restored() {
 fn open_returns_session_count_when_restored() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let name = server.scope("myapp");
-    let project_path = dir.path().join(&name);
-    let projects_dir = TestServer::registry_dir(&project_path);
-    init::init(&project_path, &projects_dir, None, server.name()).unwrap();
-    feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
-        &project_path,
-        &projects_dir,
-        "login",
-        server.name(),
-    ))
-    .unwrap();
+    let (project_path, projects_dir, name) = server.setup_project_with_feature(dir.path(), "login");
 
     // Kill both sessions
     tmux::kill_session(server.name(), &tmux::session_name(&name, "main")).unwrap();

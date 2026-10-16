@@ -7,12 +7,10 @@ mod recipient;
 mod scope;
 
 use super::*;
-use crate::state::agent::{AgentEntry, AgentType};
-use crate::state::feature::{FeatureState, FeatureStatus};
-use crate::state::project::{ProjectConfig, ProjectInfo};
-use crate::testing::TestServer;
+use crate::state::agent::AgentEntry;
+use crate::state::project::ProjectConfig;
+use crate::testing::{TestServer, feature_state, project_config};
 use crate::tmux;
-use chrono::Utc;
 use std::path::PathBuf;
 use tempfile::tempdir;
 
@@ -22,15 +20,7 @@ fn setup_project_files(dir: &Path, project_name: &str) -> PathBuf {
     let pm_dir = root.join(".pm");
     std::fs::create_dir_all(pm_dir.join("features")).unwrap();
 
-    let config = ProjectConfig {
-        project: ProjectInfo {
-            name: project_name.to_string(),
-            max_features: None,
-            fresh_base: None,
-        },
-        agents: Default::default(),
-        harness: Default::default(),
-    };
+    let config = project_config(project_name);
     config.save(&pm_dir).unwrap();
     root
 }
@@ -57,19 +47,7 @@ fn setup_named_project(
     std::fs::create_dir_all(paths::main_worktree(&root)).unwrap();
 
     if scope_name != crate::state::scope::MAIN {
-        let now = Utc::now();
-        let state = FeatureState {
-            status: FeatureStatus::Wip,
-            branch: scope_name.to_string(),
-            worktree: scope_name.to_string(),
-            base: String::new(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            team: Default::default(),
-        };
+        let state = feature_state(scope_name);
         state.save(&root.join(".pm/features"), scope_name).unwrap();
     }
 

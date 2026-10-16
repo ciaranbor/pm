@@ -58,19 +58,13 @@ pub fn msg_list(
 mod tests {
     use super::*;
     use crate::messages;
-    use std::path::PathBuf;
+    use crate::testing::bare_project;
     use tempfile::tempdir;
-
-    fn setup_project(dir: &Path) -> PathBuf {
-        let root = dir.to_path_buf();
-        std::fs::create_dir_all(root.join(".pm/features")).unwrap();
-        root
-    }
 
     #[test]
     fn list_empty_inbox() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let lines = msg_list(&root, "login", "reviewer", None).unwrap();
         assert_eq!(lines, vec!["No messages"]);
@@ -79,7 +73,7 @@ mod tests {
     #[test]
     fn list_groups_by_sender_with_status_markers() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "one").unwrap();
@@ -108,7 +102,7 @@ mod tests {
     #[test]
     fn list_scoped_to_one_sender() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "impl").unwrap();
@@ -123,7 +117,7 @@ mod tests {
     #[test]
     fn list_annotates_cross_scope_sender_with_scope() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         // Same-scope sender: no @scope annotation.
@@ -142,7 +136,7 @@ mod tests {
     #[test]
     fn list_annotates_cross_project_sender() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send_full(
@@ -164,7 +158,7 @@ mod tests {
     fn list_all_queued_when_cursor_past_end_is_impossible() {
         // After advancing past everything, the whole inbox should show as "read".
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         let mdir = paths::messages_dir(&root);
         messages::send(&mdir, "login", "reviewer", "implementer", "a").unwrap();

@@ -66,18 +66,8 @@ impl ProjectEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::register_project;
     use tempfile::tempdir;
-
-    fn register(projects_dir: &Path, name: &str, root: &Path) {
-        ProjectEntry {
-            root: root.to_string_lossy().into_owned(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        }
-        .save(projects_dir, name)
-        .unwrap();
-    }
 
     #[test]
     fn presence_distinguishes_here_husk_and_missing_root() {
@@ -105,8 +95,8 @@ mod tests {
         let projects_dir = dir.path().join("projects");
         let husk = dir.path().join("husk");
         std::fs::create_dir_all(husk.join(".pm")).unwrap();
-        register(&projects_dir, "husk", &husk);
-        register(&projects_dir, "gone", &dir.path().join("gone"));
+        register_project(&projects_dir, "husk", &husk);
+        register_project(&projects_dir, "gone", &dir.path().join("gone"));
 
         for name in ["husk", "gone"] {
             let err = ProjectEntry::load_here(&projects_dir, name).unwrap_err();

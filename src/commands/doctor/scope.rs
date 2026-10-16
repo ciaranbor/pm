@@ -348,8 +348,8 @@ mod tests {
     fn healthy_feature_reports_ok() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         let lines = doctor(&project_path, &projects_dir, false, server.name())
             .unwrap()
@@ -462,8 +462,8 @@ mod tests {
     fn missing_worktree_directory_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Remove directory on disk without telling git — simulates real drift
         std::fs::remove_dir_all(project_path.join("login")).unwrap();
@@ -490,8 +490,8 @@ mod tests {
     fn directory_exists_but_not_git_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Deregister worktree from git but leave directory on disk
         let main_repo = paths::main_worktree(&project_path);
@@ -513,8 +513,8 @@ mod tests {
     fn missing_branch_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Remove worktree first (branch can't be deleted while checked out), then branch
         let main_repo = paths::main_worktree(&project_path);
@@ -543,8 +543,8 @@ mod tests {
     fn missing_tmux_session_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Kill the feature's tmux session
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
@@ -564,8 +564,8 @@ mod tests {
     fn stuck_initializing_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Manually set the feature status to initializing
         let features_dir = paths::features_dir(&project_path);
@@ -586,8 +586,8 @@ mod tests {
     fn stuck_initializing_cleanup_returns_to_the_base_feature_scope() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "parent");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "parent");
         feat_new::feat_new(&feat_new::FeatNewParams {
             project_root: &project_path,
             projects_dir: &projects_dir,
@@ -623,8 +623,8 @@ mod tests {
     fn missing_workflow_directory_detected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Point the feature at a workflow whose directory does not exist.
         let features_dir = paths::features_dir(&project_path);
@@ -647,8 +647,8 @@ mod tests {
     fn present_workflow_directory_not_flagged() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Create a workflow directory and point the feature at it.
         let wf_dir = paths::workflows_dir(&project_path).join("real-workflow");
@@ -708,8 +708,8 @@ mod tests {
     fn multiple_issues_on_same_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Remove worktree + branch + tmux session — fully orphaned
         let main_repo = paths::main_worktree(&project_path);
@@ -731,8 +731,8 @@ mod tests {
     fn multiple_issues_non_orphan() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Remove only the worktree directory — branch still exists, so not orphaned
         std::fs::remove_dir_all(project_path.join("login")).unwrap();

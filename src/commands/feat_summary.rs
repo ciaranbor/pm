@@ -59,7 +59,7 @@ mod tests {
     #[test]
     fn path_is_where_show_reads_and_is_outside_the_worktree() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
 
         assert!(show(&project, "login").is_err());
@@ -76,7 +76,7 @@ mod tests {
     #[test]
     fn path_of_an_unknown_feature_is_refused() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
 
         assert!(matches!(

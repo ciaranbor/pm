@@ -241,7 +241,7 @@ impl TranscriptWatch {
 mod tests {
     use super::*;
     use crate::harness::{Harness, opencode_testing};
-    use crate::state::agent::AgentType;
+    use crate::testing::agent_entry;
     use serde_json::{Value, json};
 
     fn ids(event: &str) -> Vec<String> {
@@ -263,13 +263,9 @@ mod tests {
         registry.register(
             "oc",
             AgentEntry {
-                agent_type: AgentType::Agent,
                 session_id: session.to_string(),
-                window_name: "oc".to_string(),
-                active: true,
-                agent_definition: None,
                 harness: Harness::OpenCode,
-                spawned_at: None,
+                ..agent_entry("oc")
             },
         );
         registry.save(&paths::agents_dir(&root), "main").unwrap();

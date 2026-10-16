@@ -331,12 +331,10 @@ pub(super) fn callers_agent<'a>(
 mod tests {
     use super::*;
     use crate::commands::agent_spawn;
+    use crate::commands::agent_spawn::test_support::setup_project;
     use crate::commands::launch_check::Launch;
     use crate::harness::Harness;
-    use crate::state::agent::{AgentEntry, AgentType};
-    use crate::state::feature::{FeatureState, FeatureStatus};
-    use crate::testing::TestServer;
-    use chrono::Utc;
+    use crate::testing::{TestServer, agent_entry};
     use tempfile::tempdir;
 
     fn restart(
@@ -355,56 +353,6 @@ mod tests {
             true,
         )
         .map(|(line, _)| line)
-    }
-
-    fn setup_project(dir: &Path, server: &TestServer) -> (String, String) {
-        let root = dir.to_path_buf();
-        let pm_dir = root.join(".pm");
-        let project_name = server.scope("proj");
-        let feature_name = "login";
-
-        std::fs::create_dir_all(pm_dir.join("features")).unwrap();
-
-        let config = ProjectConfig {
-            project: crate::state::project::ProjectInfo {
-                name: project_name.clone(),
-                max_features: None,
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
-        config.save(&pm_dir).unwrap();
-
-        let now = Utc::now();
-        let state = FeatureState {
-            status: FeatureStatus::Wip,
-            branch: feature_name.to_string(),
-            worktree: feature_name.to_string(),
-            base: String::new(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            team: Default::default(),
-        };
-        state.save(&pm_dir.join("features"), feature_name).unwrap();
-
-        let worktree = root.join(feature_name);
-        std::fs::create_dir_all(&worktree).unwrap();
-
-        // Agent definition stubs so pre-spawn validation resolves.
-        let agents = paths::main_worktree(&root).join(".agents/agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        for name in ["reviewer", "implementer"] {
-            std::fs::write(agents.join(format!("{name}.md")), "# stub").unwrap();
-        }
-
-        let session_name = tmux::session_name(&project_name, feature_name);
-        tmux::create_session(server.name(), &session_name, &worktree).unwrap();
-
-        (session_name, feature_name.to_string())
     }
 
     #[test]
@@ -608,18 +556,7 @@ mod tests {
         // Register agent without creating a window
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::default();
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("reviewer", agent_entry("reviewer"));
         registry.save(&agents_dir, &feature).unwrap();
 
         let msg = restart(dir.path(), &feature, "reviewer", server.name()).unwrap();
@@ -681,18 +618,7 @@ mod tests {
         // Register only reviewer
         let agents_dir = paths::agents_dir(dir.path());
         let mut registry = AgentRegistry::default();
-        registry.register(
-            "reviewer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("reviewer", agent_entry("reviewer"));
         registry.save(&agents_dir, &feature).unwrap();
 
         let results = agent_restart_many(
@@ -713,7 +639,7 @@ mod tests {
     fn only_the_restarted_agent_that_exited_at_launch_has_its_result_turned_into_an_error() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project, &session, "login", "implementer");
         server.spawn_dead_fake_agent(&project, &session, "login", "reviewer");
@@ -758,7 +684,7 @@ mod tests {
     fn a_restart_whose_only_failures_did_not_come_up_says_it_restarted() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_dead_fake_agent(&project, &session, "login", "reviewer");
         server.spawn_dead_fake_agent(&project, &session, "login", "qa");
@@ -799,7 +725,7 @@ mod tests {
     fn a_mid_turn_agent_is_restarted_only_with_force_and_then_told_to_resume() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project, &session, "login", "implementer");
         server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");

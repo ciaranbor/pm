@@ -161,7 +161,7 @@ mod tests {
      {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (root, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (root, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&root, &session, "login", "reviewer");
         let waiting = || {
@@ -215,7 +215,7 @@ mod tests {
     fn a_marked_agent_that_turned_busy_is_kept_for_its_next_idle() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (root, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (root, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&root, &session, "login", "reviewer");
         runtime::write_launch_stamp(&root, "login", "reviewer", "old").unwrap();

@@ -1,21 +1,11 @@
 use super::*;
-use crate::state::project::{ProjectConfig, ProjectInfo};
+use crate::testing::project_config;
 use tempfile::{TempDir, tempdir};
 
 fn setup(global: &str) -> (TempDir, Files) {
     let dir = tempdir().unwrap();
     let root = dir.path().join("proj");
-    ProjectConfig {
-        project: ProjectInfo {
-            name: "proj".to_string(),
-            max_features: None,
-            fresh_base: None,
-        },
-        agents: Default::default(),
-        harness: Default::default(),
-    }
-    .save(&paths::pm_dir(&root))
-    .unwrap();
+    project_config("proj").save(&paths::pm_dir(&root)).unwrap();
     let global_dir = dir.path().join("config");
     std::fs::create_dir_all(&global_dir).unwrap();
     std::fs::write(global_dir.join(CONFIG_FILE), global).unwrap();

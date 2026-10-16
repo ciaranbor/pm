@@ -314,8 +314,8 @@ mod tests {
     fn unprojected_project_definition_is_flagged_until_projected() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
         let planner = paths::main_worktree(&project_path).join(".agents/agents/planner.md");
         std::fs::create_dir_all(planner.parent().unwrap()).unwrap();
         std::fs::write(&planner, "# planner").unwrap();
@@ -417,8 +417,8 @@ mod tests {
     fn stale_bundled_copies_flagged_until_migrated_then_redundant_overrides() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
         let bundled_reviewer = include_str!("../../../bundled/agents/reviewer.md");
 
         // A pre-migration project: bundled copies present, no marker.
