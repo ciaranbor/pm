@@ -26,9 +26,9 @@ use serde::Serialize;
 use crate::state::feature::{FeatureStatus, Progress};
 use crate::state::scope;
 
+use super::view::agent_attention;
 use super::{
     AgentSnapshot, AgentState, Attention, AttentionKind, FeatureSnapshot, ScopeSnapshot, Snapshot,
-    agent_attention,
 };
 
 /// The kinds that alert.
