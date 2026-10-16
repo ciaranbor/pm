@@ -1,10 +1,8 @@
 //! What pm installs: the hook events, the markers that identify pm's entry
 //! under each, and the guarded shell commands.
 //!
-//! A user-level hook fires in every session of that harness on the machine,
-//! so each installed command is guarded on `PM_AGENT_NAME`: a non-pm session
-//! exits 0 before `pm` is ever resolved, which also keeps the hook inert
-//! when `pm` is not on that session's `PATH`. The guard is `[ -n … ] || exit
+//! Each installed command is guarded on `PM_AGENT_NAME` (docs/harnesses.md,
+//! "Hooks", says why). The guard is `[ -n … ] || exit
 //! 0; exec pm …`, not `&&` — `&&` would turn a false test into an exit-1
 //! hook error. `exec` so the harness's child is pm itself, which can tell a
 //! signal's sender; macOS `/bin/sh` does not exec a final `-c` command. The

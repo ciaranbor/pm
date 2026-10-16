@@ -1,3 +1,12 @@
+//! `pm agent fork`: a new agent that starts with a copy of another's
+//! conversation, through the harness's own fork (Claude Code's
+//! `--fork-session`, `codex fork`, opencode's `session.fork`), which loads
+//! the source's transcript under a fresh session id. The source's session
+//! is left untouched, so the source can keep running and the two histories
+//! diverge from the moment of the fork. A transcript exists only on the
+//! harness that wrote it, so a source whose configured harness has changed
+//! is refused.
+
 use std::path::Path;
 
 use crate::error::{PmError, Result};
@@ -9,12 +18,6 @@ use super::agent_spawn::{SpawnParams, notes_suffix, spawn_session};
 
 /// Fork an existing agent: spawn a new agent that starts with a copy of
 /// the source's conversation history.
-///
-/// Implemented by the harness's own fork (Claude Code's `--fork-session`,
-/// `codex fork`, opencode's `session.fork`), which loads the source's
-/// transcript under a fresh session id. The source's session is left
-/// untouched, so the source can keep running and the two histories diverge
-/// cleanly from the moment of the fork.
 ///
 /// Errors if:
 /// - `source` does not exist in the registry

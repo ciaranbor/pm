@@ -49,6 +49,7 @@ pub use latest::WIDTH as LATEST_WIDTH;
 pub const VERSION: u32 = 1;
 
 /// How recent a busy agent's activity must be for its scope to be working.
+/// docs/remote-api.md, "Agent states and activity", states it in minutes.
 pub const WORKING_SECS: i64 = 20 * 60;
 
 /// A scope quiet for less than this is shown as neither working nor quiet,
