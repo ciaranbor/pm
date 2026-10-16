@@ -96,16 +96,11 @@ impl FeatureState {
 
     /// Save the feature state to `.pm/features/<name>.toml` using atomic write.
     pub fn save(&self, features_dir: &Path, name: &str) -> Result<()> {
-        std::fs::create_dir_all(features_dir)?;
-        let path = features_dir.join(format!("{name}.toml"));
         let content = toml::to_string_pretty(self)?;
-
-        // Atomic write: write to temp file, then rename
-        let tmp_path = features_dir.join(format!(".{name}.toml.tmp"));
-        std::fs::write(&tmp_path, &content)?;
-        std::fs::rename(&tmp_path, &path)?;
-
-        Ok(())
+        crate::fs_utils::write_atomic(
+            &features_dir.join(format!("{name}.toml")),
+            content.as_bytes(),
+        )
     }
 
     /// Load a feature state from `.pm/features/<name>.toml`.
@@ -401,20 +396,6 @@ mod tests {
 
         assert!(features_dir.exists());
         assert!(features_dir.join("login.toml").exists());
-    }
-
-    #[test]
-    fn feature_state_save_is_atomic() {
-        let dir = tempdir().unwrap();
-        let features_dir = dir.path().join("features");
-
-        let state = make_feature(FeatureStatus::Wip);
-        state.save(&features_dir, "login").unwrap();
-
-        // The final file should exist
-        assert!(features_dir.join("login.toml").exists());
-        // The temp file should not exist
-        assert!(!features_dir.join(".login.toml.tmp").exists());
     }
 
     #[test]

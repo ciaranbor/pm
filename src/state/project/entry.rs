@@ -50,15 +50,11 @@ impl ProjectEntry {
             return Err(PmError::InvalidProjectRoot(self.root.clone()));
         }
 
-        std::fs::create_dir_all(projects_dir)?;
-        let path = projects_dir.join(format!("{name}.toml"));
         let content = toml::to_string_pretty(self)?;
-
-        let tmp_path = projects_dir.join(format!(".{name}.toml.tmp"));
-        std::fs::write(&tmp_path, &content)?;
-        std::fs::rename(&tmp_path, &path)?;
-
-        Ok(())
+        crate::fs_utils::write_atomic(
+            &projects_dir.join(format!("{name}.toml")),
+            content.as_bytes(),
+        )
     }
 
     /// Refuse `name` for the project at `root` when the registry has a

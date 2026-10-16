@@ -23,14 +23,8 @@ pub(crate) fn load_cursor(path: &Path) -> Result<Cursor> {
 }
 
 pub(crate) fn save_cursor(path: &Path, cursor: &Cursor) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let content = serde_json::to_string_pretty(cursor)?;
-    let tmp = path.with_extension("cursor.tmp");
-    std::fs::write(&tmp, &content)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    crate::fs_utils::write_atomic(path, content.as_bytes())
 }
 
 /// Read the cursor position (last-processed index) for one sender in an

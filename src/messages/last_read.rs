@@ -20,14 +20,8 @@ pub fn save_last_read(
     last_read: &LastRead,
 ) -> Result<()> {
     let path = last_read_path(messages_dir, feature, agent);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let content = serde_json::to_string_pretty(last_read)?;
-    let tmp = path.with_file_name(".last_read.tmp");
-    std::fs::write(&tmp, &content)?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(())
+    crate::fs_utils::write_atomic(&path, content.as_bytes())
 }
 
 /// Load the last-read metadata for an agent's inbox.

@@ -166,30 +166,16 @@ impl GlobalConfig {
 
     /// Save to ~/.config/pm/config.toml using atomic write.
     pub fn save(&self, config_dir: &Path) -> Result<()> {
-        std::fs::create_dir_all(config_dir)?;
-        let path = config_dir.join("config.toml");
         let content = toml::to_string_pretty(self)?;
-
-        let tmp_path = config_dir.join(".config.toml.tmp");
-        std::fs::write(&tmp_path, &content)?;
-        std::fs::rename(&tmp_path, &path)?;
-
-        Ok(())
+        crate::fs_utils::write_atomic(&config_dir.join("config.toml"), content.as_bytes())
     }
 }
 
 impl ProjectConfig {
     /// Save to `<project-root>/.pm/config.toml` using atomic write.
     pub fn save(&self, pm_dir: &Path) -> Result<()> {
-        std::fs::create_dir_all(pm_dir)?;
-        let path = pm_dir.join("config.toml");
         let content = toml::to_string_pretty(self)?;
-
-        let tmp_path = pm_dir.join(".config.toml.tmp");
-        std::fs::write(&tmp_path, &content)?;
-        std::fs::rename(&tmp_path, &path)?;
-
-        Ok(())
+        crate::fs_utils::write_atomic(&pm_dir.join("config.toml"), content.as_bytes())
     }
 
     /// Load from `<project-root>/.pm/config.toml`.
