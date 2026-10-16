@@ -24,12 +24,7 @@ pub fn agent_stop(
 
     let mut registry = AgentRegistry::load(&agents_dir, feature)?;
 
-    // Verify agent exists in the registry
-    let entry = registry.get_mut(agent_name).ok_or_else(|| {
-        crate::error::PmError::AgentNotFound(format!(
-            "'{agent_name}' not found in scope '{feature}'"
-        ))
-    })?;
+    let entry = registry.require_mut(agent_name, feature)?;
 
     entry.active = false;
     registry.save(&agents_dir, feature)?;
