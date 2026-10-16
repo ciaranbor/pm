@@ -1,3 +1,10 @@
+//! `pm register`: make a pm project of an existing git repo. pm creates a
+//! wrapper directory holding the repo as `main/`: by default `<name>-pm/`
+//! beside the repo, with `main/` a symlink to it; with `--move`, `<name>/`
+//! beside it (the repo's own path unless `--name` differs), with the repo
+//! moved in as `main/`. It then sets up `.pm/` and opens the
+//! `<project>/main` session.
+
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
@@ -8,10 +15,6 @@ use crate::state::scope;
 use crate::tmux;
 
 /// Register an existing git repo as a pm project.
-///
-/// Creates a wrapper directory (`<name>-pm/`) and either symlinks or moves
-/// the original repo as `main/` inside it. Sets up the `.pm/` state directory
-/// and creates a `<project>/main` tmux session.
 ///
 /// Returns the project root, the wrapper directory.
 ///
@@ -71,9 +74,9 @@ pub fn register(
         ))
     })?;
 
-    // Move mode: wrapper takes the project name directly (no -pm suffix),
-    // the original repo path being vacated by the move. Symlink mode: the
-    // -pm suffix avoids a collision with the original repo.
+    // Move mode: wrapper takes the project name directly (no -pm suffix);
+    // when that is the repo's own name, the move vacates the path first.
+    // Symlink mode: the -pm suffix avoids a collision with the original repo.
     let wrapper = if move_repo {
         parent.join(&project_name)
     } else {

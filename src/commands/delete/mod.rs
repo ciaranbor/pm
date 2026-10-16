@@ -1,3 +1,12 @@
+//! `pm delete`: remove a project from pm. Every feature is safety-checked
+//! before anything is removed, then the features, `.pm/`, and the registry
+//! entry go. Without `--force`, every worktree directory is left in place:
+//! `main` holds the repository the feature worktrees link into, so it stays
+//! with them. With `--force`, features, `main`, and the then-empty project
+//! root are removed from disk; a symlinked `main` (from `pm register`
+//! without `--move`) loses only the link. A project not on this machine is
+//! deleted by name (`absent`).
+
 use std::path::Path;
 
 use crate::error::{PmError, Result};
@@ -78,14 +87,8 @@ pub struct Deleted {
     pub own: Option<tmux::OwnSession>,
 }
 
-/// Delete a project: safety-check all features, kill sessions, remove state and registry.
-/// `confirm` is asked once the checks pass and before anything is removed;
-/// `None` when it declined.
-///
-/// Without `--force`, every worktree directory is left in place — `main` holds the
-/// repository the feature worktrees link into, so it stays with them. With `--force`,
-/// features, `main`, and the then-empty project root are removed from disk; a
-/// symlinked `main` (from `pm register` without `--move`) loses only the link.
+/// Delete a project. `confirm` is asked once the checks pass and before
+/// anything is removed; `None` when it declined.
 pub fn delete(
     project_root: &Path,
     projects_dir: &Path,

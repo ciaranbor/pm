@@ -1,25 +1,19 @@
 //! `pm update`'s last step: restart the agents it left stale
-//! ([`launch_stamp`](super::launch_stamp)), through `pm agent restart --all
-//! --stale`'s sweep ([`Select::Stale`]), after the new assets and hooks are
-//! installed so the stamps compare against them. Idle and unarmed agents
-//! restart; busy ones, and the agent running the upgrade, restart at their
-//! next idle ([`restart_at_idle`](super::restart_at_idle)). Dead agents and
-//! those of a closed session are left alone: their next spawn launches
-//! with what is current. `[upgrade] restart_agents = false` in the global
-//! config turns both off.
+//! ([`launch_stamp`](super::launch_stamp)) through `pm agent restart --all
+//! --stale`'s sweep ([`Select::Stale`]). It runs after the new assets and
+//! hooks are installed, so the stamps compare against them; which agents
+//! restart, defer or are left is README's "Work with the agents".
 //!
 //! A dry run judges agents against the assets installed now, so it cannot
 //! list those only the new assets would make stale; it says so
 //! ([`DRY_RUN_CAVEAT`]) whenever the upgrade has assets to install.
 //!
-//! Before it restarts an agent whose harness reads the macOS login keychain
-//! as it starts ([`Harness::reads_keychain`]), it asks the keychain
-//! ([`keychain`]): one that does not answer would hold each such agent
-//! before its session starts, so those are left running and the rest
-//! restart. One that answers with an error, as a locked keychain does over
-//! ssh, is noted and the sweep goes ahead: a headless Mac's keychain is
-//! routinely locked, and the sweep's canaries stop it if the harnesses do
-//! not come up.
+//! The keychain check ([`keychain`], for each [`Harness::reads_keychain`])
+//! tells no answer from an error. No answer would hold each such agent
+//! before its session starts, so those are left running. An error, as a
+//! locked keychain gives over ssh, is noted and the sweep goes ahead: a
+//! headless Mac's keychain is routinely locked, and the sweep's canaries
+//! stop it if the harnesses do not come up.
 
 use std::collections::HashMap;
 use std::path::Path;

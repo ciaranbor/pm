@@ -23,7 +23,10 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
   one, so no other agent lists it (`onboard.rs`).
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state moves.
 - **Releases** — one version for pm and app, Cargo.toml's; one APK signing key, ever;
-  a removed `pm serve` path joins `RETIRED` (`serve/routes.rs`) so old apps blame themselves.
+  a removed `pm serve` path joins `RETIRED` (`commands/serve/routes.rs`) so old apps
+  blame themselves; a removed bundled item joins `RETIRED_ITEMS` (`skills/bundled.rs`)
+  so installs delete its shipped copies, and a removed harness config key its
+  harness's `RETIRED_CONFIG_KEYS` so `pm doctor` names the replacement.
 - **Harness** (`harness/`) — the agent CLI pm launches, behind a `Harness` enum:
   each seam is a `match` on `Harness` in `harness/seams/`, never a trait, and
   harness-specific knowledge lives only in `harness/<name>.rs` (read its `//!`

@@ -62,4 +62,6 @@ has no remote (no `repo_url`) but whose `.pm/` has one gets an empty repo as
 `main/`, and its state pulled into `.pm/`; its code doesn't move.
 
 The registry repo syncs your global custom workflows, never the bundled
-ones or machine-local files.
+ones or machine-local files. Between moves, `pm state pull` (`--global`
+for the registry) brings in what another machine pushed, and `pm state
+status` shows what is not yet committed.

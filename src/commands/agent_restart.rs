@@ -1,3 +1,7 @@
+//! `pm agent restart <names>`. [`agent_restart_many`] is the per-scope
+//! restart that `--all` ([`agent_restart_all`](super::agent_restart_all))
+//! and `pm update` also run.
+
 use std::path::Path;
 
 use crate::commands::agent_spawn::{SpawnOutcome, agent_spawn, agent_spawn_in, notes_suffix};

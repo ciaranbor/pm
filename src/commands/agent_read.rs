@@ -1,3 +1,9 @@
+//! `pm msg read`: one message from the agent's inbox. A bare read (no
+//! `--index`) is the read every wake prompt asks for, so it must never
+//! error over which sender to take when several have unread messages: it
+//! takes the one [`messages::resolve_sender`] picks and names the others in
+//! a footer.
+
 use std::path::Path;
 
 use crate::error::{PmError, Result};
@@ -87,7 +93,6 @@ impl IndexSpec {
 ///
 /// Without `--index`: reads the next unread message (cursor + 1) and
 /// **advances the cursor** so that repeated calls walk through the queue.
-/// This collapses the old read-then-next two-step into one command.
 ///
 /// With `--index`: reads a specific message without touching the cursor
 /// (pure historical lookup). `--from` must be explicit in this case.

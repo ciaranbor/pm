@@ -1,3 +1,12 @@
+//! `pm feat adopt <branch>`: make a pm feature of a branch that already
+//! exists, as `pm feat new` does ([`feat_common`]) but without creating the
+//! branch, so a failed adopt rolls back everything but it. A branch checked
+//! out in another worktree is refused before anything is written, unless
+//! `--from`: then that worktree is moved aside to `<path>.bak.<timestamp>`,
+//! which no rollback restores, and the harness sessions recorded at the
+//! `--from` path are carried to the new worktree
+//! ([`harness_migrate`](super::harness_migrate)).
+
 use std::path::Path;
 
 use chrono::Utc;
@@ -32,8 +41,7 @@ pub struct FeatAdoptParams<'a> {
     pub home: Option<&'a Path>,
 }
 
-/// Adopt an existing branch as a pm feature: worktree + tmux session + state file.
-/// Unlike `feat_new`, this does not create a branch — it must already exist.
+/// Adopt an existing branch as a pm feature.
 pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
     // Resolve the effective workflow (explicit wins; a context with no
     // workflow defaults to `solo`) — fail early before any side effects.

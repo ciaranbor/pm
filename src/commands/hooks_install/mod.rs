@@ -1,7 +1,6 @@
-//! Install pm hooks into the user-level hooks file of every supported
-//! harness (`~/.claude/settings.json`, `$CODEX_HOME/hooks.json`
-//! — both take the same nested `hooks` shape) — once per machine. A
-//! harness whose loop is a plugin gets [`Harness::plugin_files`] written
+//! Install pm hooks into every supported harness's user-level hooks file
+//! (docs/harnesses.md, "Hooks", has which file and what each hook does);
+//! a harness whose loop is a plugin gets [`Harness::plugin_files`] written
 //! instead. The install is idempotent, so `pm init`, `pm update`,
 //! `pm harness hooks install` and `pm doctor --fix` all run it
 //! unconditionally.
@@ -10,12 +9,10 @@
 //! if absent: which harnesses are in use is a per-project answer and the
 //! install also runs outside any project, so a harness named only in some
 //! project's `.pm/config.toml` would otherwise be skipped and its agents
-//! would idle silently. Without the user's consent to pm trusting its
-//! hooks, the accepted cost is codex's trust prompt in whichever codex
-//! session comes first, pm-spawned or not. With it, a real install has
-//! each harness trust pm's hooks as written ([`Harness::trust_pm_hooks`]),
-//! before `pm update` restarts any agent. `pm doctor` checks
-//! only the harnesses the project's agents run on.
+//! would idle silently. With the user's consent, a real install has each
+//! harness trust pm's hooks as written ([`Harness::trust_pm_hooks`]),
+//! before `pm update` restarts any agent. `pm doctor` checks only
+//! the harnesses the project's agents run on.
 //!
 //! Entries written by older releases are rewritten in place in the user
 //! file (see `entries` for how they are recognised).

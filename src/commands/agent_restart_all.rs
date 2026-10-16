@@ -25,7 +25,11 @@
 //! spawn anyway. The caller, which asked for no restart of its own, and an
 //! agent mid-turn are deferred: each restarts at its next idle
 //! ([`restart_at_idle`](super::restart_at_idle)), unless `[upgrade]
-//! restart_agents = false`, which leaves them reported as skipped.
+//! restart_agents = false`, which leaves them reported as skipped. A
+//! stale agent whose configured harness changed, which a restart would
+//! start over on a new conversation, and one that would not relaunch
+//! (`StaleCheck::unlaunchable`) are left running, each reported with the
+//! command that restarts it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -97,7 +97,7 @@ Each also starts the orchestrator, the `main` agent, in that session
 (`--no-main` skips it; `pm agent spawn main` starts it later). `main`
 dispatches features and keeps the project's
 [information store](#information-store-and-summaries). Run one per project;
-several projects side by side is the normal case.
+several projects side by side is the normal case; `pm list` lists them.
 
 ### Dispatch work
 
@@ -171,10 +171,11 @@ answer what is asking or blocked, merge what is ready, restart what is
 dead, prompt what is unarmed, look at what was denied, and ask a stalled team why it stopped. In a
 feature, `pm feat status` shows just that feature; `pm feat status main`
 shows `main`. Its `--json` form is a stable contract for scripts
-([docs/remote-api.md](docs/remote-api.md#attention-snapshot)). Under each
-row, every agent's *latest line* — the start of its last reply — says what
-it last said without attaching to it; pm's tmux tree and the phone app
-show it too.
+([docs/remote-api.md](docs/remote-api.md#attention-snapshot)); `pm feat
+list` (`--all` for every project) lists features with their branch, base
+and PR. Under each row, every agent's *latest line* — the start of its
+last reply — says what it last said without attaching to it; pm's tmux
+tree and the phone app show it too.
 
 ### Work with the agents
 
@@ -217,8 +218,9 @@ phone app does.
 When an agent misbehaves, `pm agent restart <name>` respawns it on the same
 conversation, or on a new one, saying so, when there is none to resume (its
 harness changed, or it never took a turn); `pm agent spawn <name>` adds one
-to the feature. `pm doctor`
-reports an agent whose harness has exited.
+to the feature. `pm agent stop <name>` stops one, keeping it registered
+so a spawn brings it back; `pm agent delete <name>` removes it for good.
+`pm doctor` reports an agent whose harness has exited.
 
 A spawn or restart succeeds once the agent's harness has started its
 session. One whose harness exits at launch fails with what its window
@@ -262,9 +264,9 @@ hooks it installs are the machine's; a project it can't upgrade gets its
 own line and the rest go ahead. `--dry-run` judges agents against the assets
 installed now, so it cannot list those only the new assets make stale, and
 says so. `pm agent restart --all --stale` runs the same sweep by hand, `pm
-doctor` names each stale agent, and `restart_agents = false` under
-`[upgrade]` in the global config turns the upgrade's restarts, deferred
-ones included, off. On macOS the upgrade first asks the login keychain,
+doctor` names each stale agent, and
+[`[upgrade] restart_agents`](#configuration) turns the upgrade's restarts
+off. On macOS the upgrade first asks the login keychain,
 which some harnesses (Claude Code, codex) read as they start: if it does
 not answer within 5s, agents on those harnesses are left running, each
 listed with the command that restarts it once the keychain answers; `pm
@@ -336,7 +338,7 @@ information store (`.pm/docs/`): follow-up todos, issues, ideas, and
 durable findings. Ask `main` what's in the store when deciding what to do
 next.
 
-`pm feat pr create` / `pm feat pr ready` and `pm feat sync` cover features
+`pm feat pr create` / `edit` / `ready` and `pm feat sync` cover features
 that go through a GitHub PR instead.
 
 ### Around a reboot
@@ -618,9 +620,12 @@ pm harness pull <feature>       # existing features don't get it otherwise
 For a workflow, copy `<pm config dir>/workflows/<name>/` into
 `<project>/.pm/workflows/<name>/` and edit its `config.toml` (the team)
 and `workflow.md` (the routing). `pm workflow list` shows what is
-installed and where from. `pm agent spawn <name> --agent <def>` runs
-several agents off one definition; the reserved definition `plain` is a
-vanilla session with none.
+installed and where from; `pm harness agents list` and `pm harness skills
+list` show each bundled one, whether it is installed globally, and any
+project override; their `install` and `uninstall` act on one by name, or
+on all. `pm agent spawn <name> --agent <def>` runs several agents off one
+definition; the reserved definition `plain` is a vanilla session with
+none.
 
 **Skills are the exception.** Claude Code ranks *personal* skills above
 project ones, and pm projects every bundled skill into `~/.claude/skills/`,
@@ -823,8 +828,8 @@ to trust its hooks** and fails silently without that trust;
 items](#agents-workflows-and-skills).
 
 **`[upgrade] restart_agents`**, in the global config only: `false` stops
-`pm update` restarting stale agents, now or at their next idle ([Work with the
-agents](#work-with-the-agents)).
+`pm update` restarting [stale agents](#work-with-the-agents), now or at
+their next idle.
 
 **`[project] max_features`** caps a project's in-flight features (any not
 merged or stale); the project value beats the global one, and unset means
