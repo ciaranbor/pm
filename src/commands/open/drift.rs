@@ -165,8 +165,8 @@ mod tests {
         // shouldn't appear as a drift warning.
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         tmux::kill_session(server.name(), &tmux::session_name(&project_name, "login")).unwrap();
 
@@ -181,8 +181,8 @@ mod tests {
     fn drift_warnings_report_orphaned_state() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Fully orphan the feature: remove worktree, branch, and session.
         let main_repo = paths::main_worktree(&project_path);
@@ -203,8 +203,8 @@ mod tests {
     fn drift_warnings_do_not_offer_fix_for_an_agent_whose_session_never_started() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session_name = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
         let agents_dir = paths::agents_dir(&project_path);
@@ -229,8 +229,8 @@ mod tests {
     fn drift_warnings_report_stuck_initializing() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         let features_dir = paths::features_dir(&project_path);
         let mut state = FeatureState::load(&features_dir, "login").unwrap();
@@ -250,8 +250,8 @@ mod tests {
     fn drift_warnings_empty_for_healthy_project() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
         assert!(

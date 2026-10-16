@@ -1,11 +1,10 @@
 //! Restoring a root that holds `.pm/` state but no main checkout.
 
 use super::*;
-use crate::state::feature::{FeatureState, FeatureStatus};
+use crate::state::feature::FeatureState;
 use crate::state::project::ProjectConfig;
-use crate::testing::TestServer;
+use crate::testing::{TestServer, feature_state, project_config, project_entry};
 use crate::tmux;
-use chrono::Utc;
 use tempfile::{TempDir, tempdir};
 
 /// A root holding only `.pm/messages`, with `.pm/` a git repo when
@@ -44,10 +43,9 @@ fn register(
 ) {
     let url = |p: &Path| p.to_string_lossy().into_owned();
     ProjectEntry {
-        root: root.to_string_lossy().into_owned(),
-        main_branch: "main".to_string(),
         repo_url: repo.map(url),
         state_remote: state.map(url),
+        ..project_entry(root)
     }
     .save(projects_dir, name)
     .unwrap();
@@ -60,29 +58,13 @@ fn state_remote(dir: &Path, name: &str) -> PathBuf {
     git::init_bare(&bare).unwrap();
     let staging = dir.join("state-staging");
     git::init_repo(&staging).unwrap();
-    ProjectConfig {
-        project: crate::state::project::ProjectInfo {
-            name: name.to_string(),
-            max_features: Some(7),
-            fresh_base: None,
-        },
-        agents: Default::default(),
-        harness: Default::default(),
-    }
-    .save(&staging)
-    .unwrap();
-    let now = Utc::now();
+    let mut config = project_config(name);
+    config.project.max_features = Some(7);
+    config.save(&staging).unwrap();
     FeatureState {
-        status: FeatureStatus::Wip,
-        branch: "feat-login".to_string(),
         worktree: "login".to_string(),
         base: "main".to_string(),
-        pr: String::new(),
-        context: String::new(),
-        workflow: None,
-        created: now,
-        last_active: now,
-        team: Default::default(),
+        ..feature_state("feat-login")
     }
     .save(&staging.join("features"), "login")
     .unwrap();

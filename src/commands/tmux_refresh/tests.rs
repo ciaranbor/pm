@@ -40,8 +40,8 @@ fn options_are_published_and_cleared_once_their_value_goes_away() {
     let _serial = serial();
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-    let projects_dir = TestServer::registry_dir(&project);
+    let (project, projects_dir, project_name) =
+        server.setup_project_with_feature(dir.path(), "login");
     let session = tmux::session_name(&project_name, "login");
     let implementer = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
     let reviewer = server.spawn_fake_agent(&project, &session, "login", "reviewer");
@@ -225,8 +225,8 @@ fn main_agents_get_badges_and_main_carries_its_project_and_its_agents_badge() {
     let _serial = serial();
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-    let projects_dir = TestServer::registry_dir(&project);
+    let (project, projects_dir, project_name) =
+        server.setup_project_with_feature(dir.path(), "login");
     let main = tmux::session_name(&project_name, "main");
     let orchestrator = server.spawn_idle_fake_agent(&project, &main, "main", "main");
     messages::send(&paths::messages_dir(&project), "main", "main", "user", "hi").unwrap();
@@ -280,8 +280,8 @@ fn a_feature_that_goes_takes_its_session_options_with_it() {
     let _serial = serial();
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-    let projects_dir = TestServer::registry_dir(&project);
+    let (project, projects_dir, project_name) =
+        server.setup_project_with_feature(dir.path(), "login");
     crate::commands::feat_new::feat_new(&crate::commands::feat_new::FeatNewParams::with_defaults(
         &project,
         &projects_dir,
@@ -323,8 +323,8 @@ fn a_project_removed_from_the_registry_takes_its_options_with_it() {
     let _serial = serial();
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-    let projects_dir = TestServer::registry_dir(&project);
+    let (project, projects_dir, project_name) =
+        server.setup_project_with_feature(dir.path(), "login");
     let session = tmux::session_name(&project_name, "login");
     let window = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
     refresh(&projects_dir, server.name()).unwrap();
@@ -415,8 +415,8 @@ fn changes_are_written_in_one_tmux_call_and_a_repeat_writes_nothing() {
     let _serial = serial();
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-    let projects_dir = TestServer::registry_dir(&project);
+    let (project, projects_dir, project_name) =
+        server.setup_project_with_feature(dir.path(), "login");
     let session = tmux::session_name(&project_name, "login");
     server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
     server.tmux_stdout(&["set-option", "-s", "message-limit", "100000"]);
@@ -1096,8 +1096,8 @@ fn a_project_whose_state_or_registry_entry_cannot_be_read_keeps_what_it_publishe
     for breakage in breakages {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project);
+        let (project, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         feat_status(
             &project,
@@ -1127,8 +1127,8 @@ fn a_client_gone_since_the_read_fails_no_refresh() {
     let _serial = serial();
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-    let projects_dir = TestServer::registry_dir(&project);
+    let (project, projects_dir, project_name) =
+        server.setup_project_with_feature(dir.path(), "login");
     let session = tmux::session_name(&project_name, "login");
     refresh(&projects_dir, server.name()).unwrap();
     feat_status(
@@ -1155,8 +1155,8 @@ fn an_agents_latest_line_survives_its_own_window_write() {
     let _serial = serial();
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-    let projects_dir = TestServer::registry_dir(&project);
+    let (project, projects_dir, project_name) =
+        server.setup_project_with_feature(dir.path(), "login");
     let session = tmux::session_name(&project_name, "login");
     let window = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
     let transcript = dir.path().join("s.jsonl");

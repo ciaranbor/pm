@@ -63,8 +63,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn setup_project(dir: &Path) -> std::path::PathBuf {
-        let root = dir.to_path_buf();
-        std::fs::create_dir_all(root.join(".pm/features")).unwrap();
+        let root = crate::testing::bare_project(dir);
         std::fs::write(root.join(".pm/features/login.toml"), "").unwrap();
         root
     }

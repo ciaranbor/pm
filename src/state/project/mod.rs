@@ -86,6 +86,7 @@ pub fn check_feature_limit(project_root: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{feature_state, project_config};
     use tempfile::tempdir;
 
     #[test]
@@ -97,31 +98,12 @@ mod tests {
         std::fs::create_dir_all(&features_dir).unwrap();
 
         // Write config without max_features
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: "test".to_string(),
-                max_features: None,
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
+        let config = project_config("test");
         config.save(&pm_dir).unwrap();
 
         // Create many features — should never fail
         for i in 0..10 {
-            let state = crate::state::feature::FeatureState {
-                status: crate::state::feature::FeatureStatus::Wip,
-                branch: format!("feat-{i}"),
-                worktree: format!("feat-{i}"),
-                base: String::new(),
-                pr: String::new(),
-                context: String::new(),
-                workflow: None,
-                created: chrono::Utc::now(),
-                last_active: chrono::Utc::now(),
-                team: Default::default(),
-            };
+            let state = feature_state(&format!("feat-{i}"));
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
 
@@ -136,31 +118,13 @@ mod tests {
         let features_dir = pm_dir.join("features");
         std::fs::create_dir_all(&features_dir).unwrap();
 
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: "test".to_string(),
-                max_features: Some(2),
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
+        let mut config = project_config("test");
+        config.project.max_features = Some(2);
         config.save(&pm_dir).unwrap();
 
         // Create 2 Wip features
         for i in 0..2 {
-            let state = crate::state::feature::FeatureState {
-                status: crate::state::feature::FeatureStatus::Wip,
-                branch: format!("feat-{i}"),
-                worktree: format!("feat-{i}"),
-                base: String::new(),
-                pr: String::new(),
-                context: String::new(),
-                workflow: None,
-                created: chrono::Utc::now(),
-                last_active: chrono::Utc::now(),
-                team: Default::default(),
-            };
+            let state = feature_state(&format!("feat-{i}"));
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
 
@@ -179,31 +143,13 @@ mod tests {
         let features_dir = pm_dir.join("features");
         std::fs::create_dir_all(&features_dir).unwrap();
 
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: "test".to_string(),
-                max_features: Some(3),
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
+        let mut config = project_config("test");
+        config.project.max_features = Some(3);
         config.save(&pm_dir).unwrap();
 
         // Create 2 features (under limit of 3)
         for i in 0..2 {
-            let state = crate::state::feature::FeatureState {
-                status: crate::state::feature::FeatureStatus::Wip,
-                branch: format!("feat-{i}"),
-                worktree: format!("feat-{i}"),
-                base: String::new(),
-                pr: String::new(),
-                context: String::new(),
-                workflow: None,
-                created: chrono::Utc::now(),
-                last_active: chrono::Utc::now(),
-                team: Default::default(),
-            };
+            let state = feature_state(&format!("feat-{i}"));
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
 
@@ -218,29 +164,14 @@ mod tests {
         let features_dir = pm_dir.join("features");
         std::fs::create_dir_all(&features_dir).unwrap();
 
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: "test".to_string(),
-                max_features: Some(1),
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
+        let mut config = project_config("test");
+        config.project.max_features = Some(1);
         config.save(&pm_dir).unwrap();
 
         // Create a merged feature — should not count toward limit
         let state = crate::state::feature::FeatureState {
             status: crate::state::feature::FeatureStatus::Merged,
-            branch: "old-feat".to_string(),
-            worktree: "old-feat".to_string(),
-            base: String::new(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: chrono::Utc::now(),
-            last_active: chrono::Utc::now(),
-            team: Default::default(),
+            ..feature_state("old-feat")
         };
         state.save(&features_dir, "old-feat").unwrap();
 
@@ -255,29 +186,14 @@ mod tests {
         let features_dir = pm_dir.join("features");
         std::fs::create_dir_all(&features_dir).unwrap();
 
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: "test".to_string(),
-                max_features: Some(1),
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
+        let mut config = project_config("test");
+        config.project.max_features = Some(1);
         config.save(&pm_dir).unwrap();
 
         // Create a stale feature — should not count toward limit
         let state = crate::state::feature::FeatureState {
             status: crate::state::feature::FeatureStatus::Stale,
-            branch: "stale-feat".to_string(),
-            worktree: "stale-feat".to_string(),
-            base: String::new(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: chrono::Utc::now(),
-            last_active: chrono::Utc::now(),
-            team: Default::default(),
+            ..feature_state("stale-feat")
         };
         state.save(&features_dir, "stale-feat").unwrap();
 
@@ -293,31 +209,13 @@ mod tests {
         std::fs::create_dir_all(&features_dir).unwrap();
 
         // Project allows 5
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: "test".to_string(),
-                max_features: Some(5),
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
+        let mut config = project_config("test");
+        config.project.max_features = Some(5);
         config.save(&pm_dir).unwrap();
 
         // Create 3 features — under project limit of 5
         for i in 0..3 {
-            let state = crate::state::feature::FeatureState {
-                status: crate::state::feature::FeatureStatus::Wip,
-                branch: format!("feat-{i}"),
-                worktree: format!("feat-{i}"),
-                base: String::new(),
-                pr: String::new(),
-                context: String::new(),
-                workflow: None,
-                created: chrono::Utc::now(),
-                last_active: chrono::Utc::now(),
-                team: Default::default(),
-            };
+            let state = feature_state(&format!("feat-{i}"));
             state.save(&features_dir, &format!("feat-{i}")).unwrap();
         }
 

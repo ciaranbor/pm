@@ -168,7 +168,7 @@ mod tests {
     fn diff_no_differences() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -183,7 +183,7 @@ mod tests {
     fn diff_detects_value_difference() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -201,7 +201,7 @@ mod tests {
     fn diff_detects_key_only_in_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -216,7 +216,7 @@ mod tests {
     fn diff_detects_key_only_in_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");
@@ -231,7 +231,7 @@ mod tests {
     fn diff_file_only_in_main() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"x":1}"#);
@@ -244,7 +244,7 @@ mod tests {
     fn diff_file_only_in_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"x":1}"#);
@@ -257,7 +257,7 @@ mod tests {
     fn diff_both_files_missing_no_output() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let result = diff(&project, "login", CC).unwrap();
         assert!(result.is_empty());
@@ -277,7 +277,7 @@ mod tests {
     fn diff_ignores_settings_local_json() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         let feat_claude = project.join("login").join(".claude");

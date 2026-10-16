@@ -283,53 +283,22 @@ pub(super) mod tests {
         let root = &root.canonicalize().unwrap();
         let pm_dir = root.join(".pm");
         std::fs::create_dir_all(&pm_dir).unwrap();
-        let config = ProjectConfig {
-            project: crate::state::project::ProjectInfo {
-                name: name.to_string(),
-                max_features: None,
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
-        config.save(&pm_dir).unwrap();
+        crate::testing::project_config(name).save(&pm_dir).unwrap();
         let main_path = paths::main_worktree(root);
         std::fs::create_dir_all(&main_path).unwrap();
-        register(root, name, projects_dir);
+        crate::testing::register_project(projects_dir, name, root);
         main_path
     }
 
     /// A registered feature of the project at `root` with its worktree;
     /// returns the worktree.
     pub fn add_feature(root: &Path, name: &str) -> PathBuf {
-        let now = chrono::Utc::now();
-        crate::state::feature::FeatureState {
-            status: crate::state::feature::FeatureStatus::Wip,
-            team: Default::default(),
-            branch: name.to_string(),
-            worktree: name.to_string(),
-            base: String::new(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-        }
-        .save(&paths::features_dir(root), name)
-        .unwrap();
+        crate::testing::feature_state(name)
+            .save(&paths::features_dir(root), name)
+            .unwrap();
         let worktree = root.join(name);
         std::fs::create_dir_all(&worktree).unwrap();
         worktree
-    }
-
-    pub fn register(root: &Path, name: &str, projects_dir: &Path) {
-        let entry = ProjectEntry {
-            root: root.to_string_lossy().to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
-        entry.save(projects_dir, name).unwrap();
     }
 
     /// Export `project_root` (or every project) from the store under `home`.

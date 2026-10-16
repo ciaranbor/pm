@@ -1,12 +1,12 @@
 use super::*;
-use crate::testing::{ControlClient, OwnServer};
+use crate::testing::{ControlClient, OwnServer, agent_entry};
 use crate::tmux as tmux_mod;
 
 #[test]
 fn delete_cleans_up_all_artifacts() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
 
     // Pre-create additional artifacts that delete should clean up
     let agents_dir = paths::agents_dir(&project_path);
@@ -14,13 +14,8 @@ fn delete_cleans_up_all_artifacts() {
     registry.register(
         "reviewer",
         crate::state::agent::AgentEntry {
-            agent_type: crate::state::agent::AgentType::Agent,
             session_id: "test".to_string(),
-            window_name: "reviewer".to_string(),
-            active: true,
-            agent_definition: None,
-            harness: crate::harness::Harness::ClaudeCode,
-            spawned_at: None,
+            ..agent_entry("reviewer")
         },
     );
     registry.save(&agents_dir, "login").unwrap();
@@ -36,14 +31,7 @@ fn delete_cleans_up_all_artifacts() {
         tmux_mod::has_session(server.name(), &tmux::session_name(&scoped_name, "login")).unwrap()
     );
 
-    feat_delete(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        false,
-        server.name(),
-    )
-    .unwrap();
+    feat_delete(&project_path, &projects_dir, "login", false, server.name()).unwrap();
 
     // State file removed
     let features_dir = paths::features_dir(&project_path);
@@ -68,7 +56,8 @@ fn delete_cleans_up_all_artifacts() {
 fn feat_delete_moves_only_the_clients_viewing_the_feature_to_its_base() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+    let (project, projects_dir, name) =
+        server.setup_project_with_feature_no_tmux(dir.path(), "login");
     let own = OwnServer::start("feat-delete-clients");
     for scope in ["main", "login", "other"] {
         tmux::create_session(own.name(), &tmux::session_name(&name, scope), dir.path()).unwrap();
@@ -78,14 +67,7 @@ fn feat_delete_moves_only_the_clients_viewing_the_feature_to_its_base() {
     let _viewer = ControlClient::attach(own.name(), &tmux::session_name(&name, "login"));
     let _bystander = ControlClient::attach(own.name(), &tmux::session_name(&name, "other"));
 
-    feat_delete(
-        &project,
-        &TestServer::registry_dir(&project),
-        "login",
-        false,
-        own.name(),
-    )
-    .unwrap();
+    feat_delete(&project, &projects_dir, "login", false, own.name()).unwrap();
 
     let mut viewing: Vec<String> = tmux_mod::clients::list(own.name())
         .unwrap()
@@ -106,18 +88,13 @@ fn feat_delete_moves_only_the_clients_viewing_the_feature_to_its_base() {
 fn a_worktree_that_cannot_be_removed_is_reported_and_the_rest_still_goes() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, project_name) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, project_name) =
+        server.setup_project_with_feature(dir.path(), "login");
     let worktree = project_path.join("login");
     let locked = crate::testing::lock_in(&worktree);
 
-    let Ended { warnings, .. } = feat_delete(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        false,
-        server.name(),
-    )
-    .unwrap();
+    let Ended { warnings, .. } =
+        feat_delete(&project_path, &projects_dir, "login", false, server.name()).unwrap();
 
     assert!(
         warnings
@@ -140,7 +117,7 @@ fn a_worktree_that_cannot_be_removed_is_reported_and_the_rest_still_goes() {
 fn a_feature_whose_worktree_git_dropped_is_deleted_with_what_is_left_of_it() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(dir.path(), "login");
     let worktree = project_path.join("login");
     let main = paths::main_worktree(&project_path);
     git::unlock_worktree(&main, &worktree);
@@ -148,14 +125,8 @@ fn a_feature_whose_worktree_git_dropped_is_deleted_with_what_is_left_of_it() {
     git::prune_worktrees(&main).unwrap();
     std::fs::write(worktree.join("left.txt"), "left behind").unwrap();
 
-    let Ended { warnings, .. } = feat_delete(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        false,
-        server.name(),
-    )
-    .unwrap();
+    let Ended { warnings, .. } =
+        feat_delete(&project_path, &projects_dir, "login", false, server.name()).unwrap();
 
     assert!(
         warnings
@@ -177,18 +148,11 @@ fn a_feature_whose_worktree_directory_is_gone_still_loses_its_branch() {
     let server = TestServer::new();
     // Canonical, so the path matches the one git records for the worktree.
     let root = dir.path().canonicalize().unwrap();
-    let (project_path, _) = server.setup_project_with_feature(&root, "login");
+    let (project_path, projects_dir, _) = server.setup_project_with_feature(&root, "login");
     let main = paths::main_worktree(&project_path);
     std::fs::remove_dir_all(project_path.join("login")).unwrap();
 
-    feat_delete(
-        &project_path,
-        &TestServer::registry_dir(&project_path),
-        "login",
-        false,
-        server.name(),
-    )
-    .unwrap();
+    feat_delete(&project_path, &projects_dir, "login", false, server.name()).unwrap();
 
     assert!(!git::branch_exists(&main, "login").unwrap());
     assert!(

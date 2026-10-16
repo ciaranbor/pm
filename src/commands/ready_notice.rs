@@ -249,7 +249,7 @@ mod tests {
     fn a_notice_waits_for_the_busy_team_and_is_sent_once() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = crate::tmux::session_name(&project_name, "login");
         let reviewer = server.spawn_fake_agent(&project, &session, "login", "reviewer");
         write_summary(&project, "notes");
@@ -268,7 +268,7 @@ mod tests {
     fn leaving_ready_drops_a_due_notice() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = crate::tmux::session_name(&project_name, "login");
         let reviewer = server.spawn_fake_agent(&project, &session, "login", "reviewer");
         write_summary(&project, "notes");
@@ -284,7 +284,7 @@ mod tests {
     #[test]
     fn main_is_told_again_only_of_a_new_summary_after_it_answered() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         write_summary(&project, "notes");
         assert_eq!(ready(&project, NO_SERVER), Notice::Sent);
@@ -310,7 +310,7 @@ mod tests {
     #[test]
     fn a_new_summary_after_more_work_is_announced_unanswered() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         write_summary(&project, "notes");
         assert_eq!(ready(&project, NO_SERVER), Notice::Sent);

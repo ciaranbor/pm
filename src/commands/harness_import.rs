@@ -266,7 +266,7 @@ fn worktrees<'a>(
 mod tests {
     use super::*;
     use crate::commands::harness_export::tests::{
-        add_feature, register, run_export, setup_claude_sessions, setup_project,
+        add_feature, run_export, setup_claude_sessions, setup_project,
     };
     use tempfile::tempdir;
 
@@ -333,7 +333,7 @@ mod tests {
         let source = claude_source();
         let home = tempdir().unwrap();
         let registry = tempdir().unwrap();
-        register(source.project.path(), "myapp", registry.path());
+        crate::testing::register_project(registry.path(), "myapp", source.project.path());
 
         let msgs = run_import(
             Harness::ClaudeCode,
@@ -511,7 +511,7 @@ mod tests {
 
         let home = tempdir().unwrap();
         let registry = tempdir().unwrap();
-        register(&source_root, "myapp", registry.path());
+        crate::testing::register_project(registry.path(), "myapp", &source_root);
         let msgs = run_import(Harness::ClaudeCode, &tarball, registry.path(), home.path()).unwrap();
         assert_eq!(msgs, ["Imported 'myapp/login' (1 session(s))"]);
     }
@@ -534,7 +534,7 @@ mod tests {
         let source = claude_source();
         let home = tempdir().unwrap();
         let registry = tempdir().unwrap();
-        register(source.project.path(), "myapp", registry.path());
+        crate::testing::register_project(registry.path(), "myapp", source.project.path());
 
         let err = run_import(
             Harness::Codex,

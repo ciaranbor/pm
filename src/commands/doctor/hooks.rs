@@ -103,10 +103,10 @@ mod tests {
     use crate::commands::doctor::{Depth, Finding, PROJECT, diagnose, doctor};
     use crate::commands::hooks_install;
     use crate::harness::Harness;
-    use crate::state::agent::{AgentRegistry, AgentType};
+    use crate::state::agent::AgentRegistry;
     use crate::state::feature::FeatureState;
     use crate::state::project::ProjectConfig;
-    use crate::testing::TestServer;
+    use crate::testing::{TestServer, agent_entry};
     use tempfile::tempdir;
 
     #[test]
@@ -128,13 +128,8 @@ mod tests {
         registry.register(
             "reviewer",
             crate::state::agent::AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "reviewer".to_string(),
                 active: false,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("reviewer")
             },
         );
         registry
@@ -268,20 +263,16 @@ mod tests {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature(dir.path(), "login");
 
         // Trust is per worktree: main runs a registered agent whose
         // definition (not its key) is the reviewer, login's workflow team
         // includes one, api has only an implementer.
         let stopped = |name: &str, definition: Option<&str>| crate::state::agent::AgentEntry {
-            agent_type: AgentType::Agent,
-            session_id: String::new(),
-            window_name: name.to_string(),
             active: false,
             agent_definition: definition.map(str::to_string),
-            harness: Harness::ClaudeCode,
-            spawned_at: None,
+            ..agent_entry(name)
         };
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::default();
@@ -294,7 +285,7 @@ mod tests {
         crate::commands::feat_new::feat_new(
             &crate::commands::feat_new::FeatNewParams::with_defaults(
                 &project_path,
-                &TestServer::registry_dir(&project_path),
+                &projects_dir,
                 "api",
                 server.name(),
             ),

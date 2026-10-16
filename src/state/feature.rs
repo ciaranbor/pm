@@ -203,6 +203,7 @@ pub fn base_checkout(project_root: &Path, main_branch: &str, base: &str) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::feature_state;
     use tempfile::tempdir;
 
     #[test]
@@ -247,15 +248,7 @@ mod tests {
     fn make_feature(status: FeatureStatus) -> FeatureState {
         FeatureState {
             status,
-            branch: "login".to_string(),
-            worktree: "login".to_string(),
-            base: String::new(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: Utc::now(),
-            last_active: Utc::now(),
-            team: Default::default(),
+            ..feature_state("login")
         }
     }
 

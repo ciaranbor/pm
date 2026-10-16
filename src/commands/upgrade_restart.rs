@@ -133,7 +133,7 @@ mod tests {
     fn a_stale_idle_agent_is_restarted_unless_config_turns_it_off_and_a_dry_run_only_says_so() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");
         crate::state::runtime::write_launch_stamp(&project, "login", "reviewer", "old").unwrap();
@@ -176,7 +176,7 @@ mod tests {
     fn a_busy_stale_agent_is_deferred_to_its_next_idle_unless_config_turns_it_off() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_fake_agent(&project, &session, "login", "implementer");
         crate::state::runtime::write_launch_stamp(&project, "login", "implementer", "old").unwrap();
@@ -221,7 +221,7 @@ mod tests {
     fn the_keychain_holds_back_its_readers_while_it_hangs_and_an_error_is_only_noted() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");
         crate::state::runtime::write_launch_stamp(&project, "login", "reviewer", "old").unwrap();

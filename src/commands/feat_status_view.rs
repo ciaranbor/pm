@@ -286,7 +286,7 @@ mod tests {
     use super::*;
     use crate::commands::attention::AgentState;
     use crate::commands::{feat_status::feat_status, feat_summary};
-    use crate::testing::TestServer;
+    use crate::testing::{TestServer, agent_entry};
     use tempfile::tempdir;
 
     fn write_summary(project: &Path, name: &str, body: &str) {
@@ -305,7 +305,7 @@ mod tests {
     fn project_view_puts_the_most_urgent_first_with_who_is_blocked() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         add_feature(&project, "auth");
         add_feature(&project, "search");
         feat_status(
@@ -343,7 +343,7 @@ mod tests {
     #[test]
     fn feature_view_shows_the_reason_and_the_summary_head() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         feat_status(
             &project,
@@ -373,22 +373,17 @@ mod tests {
 
     #[test]
     fn feature_view_lists_each_agents_latest_line_before_the_summary() {
-        use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+        use crate::state::agent::{AgentEntry, AgentRegistry};
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         let agents_dir = paths::agents_dir(&project);
         let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
         registry.register(
             "worker",
             AgentEntry {
-                agent_type: AgentType::Agent,
                 session_id: "s1".into(),
-                window_name: "worker".into(),
-                active: true,
-                agent_definition: None,
-                harness: crate::harness::Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("worker")
             },
         );
         registry.save(&agents_dir, "login").unwrap();
@@ -576,7 +571,7 @@ mod tests {
     #[test]
     fn feature_view_dates_the_last_activity_by_its_agents() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         runtime::set_activity(
             &project,
@@ -594,7 +589,7 @@ mod tests {
     fn a_blocked_main_has_a_view_of_its_own_and_a_row_in_the_projects() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         assert_eq!(feature(&project, "main").unwrap(), ["main  wip"]);
 
         feat_status(

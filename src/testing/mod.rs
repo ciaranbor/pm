@@ -16,6 +16,7 @@ use std::sync::RwLock;
 pub const NO_SERVER: Option<&str> = Some("pm-test-none");
 
 mod control_client;
+mod entries;
 mod fake_agents;
 mod fake_app_server;
 mod fake_harness;
@@ -29,6 +30,7 @@ mod system_ptys;
 mod tmux_server;
 
 pub use control_client::ControlClient;
+pub use entries::{agent_entry, feature_state, project_config, project_entry, register_project};
 pub use fake_app_server::FakeAppServer;
 pub(crate) use fake_harness::{HOLD_START, fake_claude, fake_harness_binary, window_path};
 pub use fake_harness::{
@@ -38,6 +40,7 @@ pub use fake_harness::{
 pub use fake_opencode_server::{FakeOpenCodeServer, OpenCodeRequest};
 pub use fake_socket::FakeSocket;
 pub use home::test_home;
+pub use projects::bare_project;
 pub use tmux_server::{OwnServer, TestServer, server_socket_exists};
 
 /// The screen captured in `tests/fixtures/screens/<name>.txt`.

@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn delete_moves_only_the_clients_viewing_the_project_off_it() {
         let dir = tempdir().unwrap();
-        let (project, name) =
+        let (project, projects_dir, name) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         let own = OwnServer::start("delete-clients");
         let login = tmux::session_name(&name, "login");
@@ -326,7 +326,6 @@ mod tests {
         let bystander = clients.iter().find(|c| c.session == "elsewhere").unwrap();
         let bystander = bystander.name.clone();
 
-        let projects_dir = TestServer::registry_dir(&project);
         delete(&project, &projects_dir, false, own.name(), |_| Ok(true)).unwrap();
 
         let clients = tmux::clients::list(own.name()).unwrap();
@@ -425,7 +424,7 @@ mod tests {
     fn delete_blocked_by_unmerged_commits() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, _project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(
             &project_path,
@@ -537,8 +536,7 @@ mod tests {
     #[test]
     fn force_warns_about_history_only_main_holds() {
         let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _, _) = server.setup_project(dir.path());
+        let (project_path, _, _) = TestServer::new().setup_project_no_tmux(dir.path());
         let main = paths::main_worktree(&project_path);
 
         let warnings = force_loss_warnings(&main);
@@ -616,7 +614,7 @@ mod tests {
     fn delete_only_blocks_for_problematic_features() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project_path, projects_dir, _project_name) = server.setup_project(dir.path());
+        let (project_path, projects_dir, _) = server.setup_project(dir.path());
 
         // Create two features — one clean (merged), one dirty
         feat_new::feat_new(&feat_new::FeatNewParams::with_defaults(

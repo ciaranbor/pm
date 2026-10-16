@@ -386,7 +386,7 @@ impl Project<'_> {
 mod tests {
     use super::super::Severity;
     use super::*;
-    use crate::testing::TestServer;
+    use crate::testing::{TestServer, project_entry};
     use std::path::Path;
     use tempfile::tempdir;
 
@@ -408,7 +408,7 @@ mod tests {
     fn a_project_blocks_until_its_work_and_state_are_on_origin() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (root, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (root, _, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&root);
         let pm_dir = paths::pm_dir(&root);
         let repo = bare(&dir.path().join("repo.git"));
@@ -463,16 +463,15 @@ mod tests {
     fn a_branch_on_no_remote_blocks_only_with_commits_of_its_own() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (root, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (root, _, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&root);
         let repo = bare(&dir.path().join("repo.git"));
         git::add_remote(&main, "origin", &repo).unwrap();
         git::push(&main, "origin", "main").unwrap();
         let entry = ProjectEntry {
             root: path_utils::to_portable(&root),
-            main_branch: "main".to_string(),
             repo_url: Some(repo),
-            state_remote: None,
+            ..project_entry(&root)
         };
         let login_findings = || {
             findings(&name, &entry, None, &HarnessConfig::default())
@@ -505,7 +504,7 @@ mod tests {
     fn a_commitless_branch_stacked_on_another_needs_neither_pushed() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (root, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (root, _, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&root);
         let repo = bare(&dir.path().join("repo.git"));
         git::add_remote(&main, "origin", &repo).unwrap();
@@ -520,9 +519,8 @@ mod tests {
         notes.save(&features_dir, "notes").unwrap();
         let entry = ProjectEntry {
             root: path_utils::to_portable(&root),
-            main_branch: "main".to_string(),
             repo_url: Some(repo),
-            state_remote: None,
+            ..project_entry(&root)
         };
         let notes_findings = || {
             findings(&name, &entry, None, &HarnessConfig::default())
@@ -559,7 +557,7 @@ mod tests {
     fn a_diverged_feature_is_rebased_in_its_own_worktree() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (root, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (root, _, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&root);
         let repo = bare(&dir.path().join("repo.git"));
         git::add_remote(&main, "origin", &repo).unwrap();
@@ -581,9 +579,8 @@ mod tests {
 
         let entry = ProjectEntry {
             root: path_utils::to_portable(&root),
-            main_branch: "main".to_string(),
             repo_url: Some(repo),
-            state_remote: None,
+            ..project_entry(&root)
         };
         let found = blockers(&name, &entry);
         let diverged = found
@@ -601,7 +598,7 @@ mod tests {
     fn a_features_problems_are_one_line_with_one_fix_and_wip_is_in_flight() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (root, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (root, _, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&root);
         let repo = bare(&dir.path().join("repo.git"));
         git::add_remote(&main, "origin", &repo).unwrap();
@@ -614,9 +611,8 @@ mod tests {
         std::fs::write(login.join("b.txt"), "b").unwrap();
         let entry = ProjectEntry {
             root: path_utils::to_portable(&root),
-            main_branch: "main".to_string(),
             repo_url: Some(repo),
-            state_remote: None,
+            ..project_entry(&root)
         };
         let login_line = || {
             blockers(&name, &entry)
@@ -668,9 +664,8 @@ mod tests {
         git::push(&pm_dir, "origin", &git::current_branch(&pm_dir).unwrap()).unwrap();
         let entry = ProjectEntry {
             root: path_utils::to_portable(&root),
-            main_branch: "main".to_string(),
-            repo_url: None,
             state_remote: Some(state),
+            ..project_entry(&root)
         };
         assert_eq!(blockers(&name, &entry), []);
 
@@ -693,7 +688,7 @@ mod tests {
     fn a_rebase_in_progress_is_resolved_before_anything_is_committed() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (root, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (root, _, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let main = paths::main_worktree(&root);
         let login = root.join("login");
         for (worktree, text) in [(&main, "main"), (&login, "login")] {
@@ -704,9 +699,7 @@ mod tests {
         assert!(git::run_git(&login, &["rebase", "main"]).is_err());
         let entry = ProjectEntry {
             root: path_utils::to_portable(&root),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
+            ..project_entry(&root)
         };
         let found = blockers(&name, &entry);
         let rebase = found.iter().find(|f| f.subject == "login/").unwrap();
@@ -722,12 +715,10 @@ mod tests {
     fn json_carries_the_verdict_and_where_each_step_runs() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (root, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (root, _, name) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let entry = ProjectEntry {
             root: path_utils::to_portable(&root),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
+            ..project_entry(&root)
         };
         let (findings, _) = findings(&name, &entry, None, &HarnessConfig::default()).unwrap();
         let report = super::super::Report {

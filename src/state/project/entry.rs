@@ -169,16 +169,12 @@ pub struct Malformed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::project_entry;
     use tempfile::tempdir;
 
     #[test]
     fn project_entry_roundtrip_toml() {
-        let entry = ProjectEntry {
-            root: "/home/user/projects/myapp".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry("/home/user/projects/myapp");
         let serialized = toml::to_string_pretty(&entry).unwrap();
         let deserialized: ProjectEntry = toml::from_str(&serialized).unwrap();
         assert_eq!(entry, deserialized);
@@ -187,10 +183,9 @@ mod tests {
     #[test]
     fn project_entry_roundtrip_toml_with_urls() {
         let entry = ProjectEntry {
-            root: "/home/user/projects/myapp".to_string(),
-            main_branch: "main".to_string(),
             repo_url: Some("https://github.com/user/myapp.git".to_string()),
             state_remote: Some("https://github.com/user/myapp-pm-state.git".to_string()),
+            ..project_entry("/home/user/projects/myapp")
         };
         let serialized = toml::to_string_pretty(&entry).unwrap();
         assert!(serialized.contains("repo_url"));
@@ -201,12 +196,7 @@ mod tests {
 
     #[test]
     fn project_entry_roundtrip_none_urls_omitted() {
-        let entry = ProjectEntry {
-            root: "/home/user/projects/myapp".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry("/home/user/projects/myapp");
         let serialized = toml::to_string_pretty(&entry).unwrap();
         // None fields should not appear in serialized output
         assert!(!serialized.contains("repo_url"));
@@ -237,12 +227,7 @@ main_branch = "main"
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
 
-        let entry = ProjectEntry {
-            root: "/home/user/projects/myapp".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry("/home/user/projects/myapp");
         entry.save(&projects_dir, "myapp").unwrap();
 
         let loaded = ProjectEntry::load(&projects_dir, "myapp").unwrap();
@@ -272,12 +257,7 @@ main_branch = "main"
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
 
-        let entry = ProjectEntry {
-            root: "./exo-bench".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry("./exo-bench");
         assert!(matches!(
             entry.save(&projects_dir, "exo-bench").unwrap_err(),
             PmError::InvalidProjectRoot(_)
@@ -289,12 +269,7 @@ main_branch = "main"
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
 
-        let entry = ProjectEntry {
-            root: "~/Projects/myapp".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry("~/Projects/myapp");
         entry.save(&projects_dir, "myapp").unwrap();
         assert!(projects_dir.join("myapp.toml").exists());
     }
@@ -304,12 +279,7 @@ main_branch = "main"
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("nonexistent").join("projects");
 
-        let entry = ProjectEntry {
-            root: "/tmp/test".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry("/tmp/test");
         entry.save(&projects_dir, "test").unwrap();
 
         assert!(projects_dir.exists());
@@ -331,17 +301,10 @@ main_branch = "main"
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
 
-        let entry_a = ProjectEntry {
-            root: "/tmp/alpha".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry_a = project_entry("/tmp/alpha");
         let entry_b = ProjectEntry {
-            root: "/tmp/beta".to_string(),
             main_branch: "develop".to_string(),
-            repo_url: None,
-            state_remote: None,
+            ..project_entry("/tmp/beta")
         };
 
         entry_a.save(&projects_dir, "alpha").unwrap();
@@ -357,12 +320,7 @@ main_branch = "main"
     fn project_entry_list_skips_an_unreadable_entry() {
         let dir = tempdir().unwrap();
         let projects_dir = dir.path().join("projects");
-        let entry = ProjectEntry {
-            root: "/tmp/alpha".to_string(),
-            main_branch: "main".to_string(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let entry = project_entry("/tmp/alpha");
         entry.save(&projects_dir, "alpha").unwrap();
         let bad = projects_dir.join("beta.toml");
         std::fs::write(&bad, "root = \"/tmp/beta\"\nmain_branch = 3\n").unwrap();

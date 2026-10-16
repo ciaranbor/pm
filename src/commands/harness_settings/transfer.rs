@@ -118,7 +118,7 @@ mod tests {
     fn pull_does_not_copy_settings_local_json() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"pulled":true}"#);
@@ -142,7 +142,7 @@ mod tests {
     fn push_copies_settings_json_and_leaves_main_settings_local_json_alone() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(
@@ -185,7 +185,7 @@ mod tests {
     fn push_fails_when_feature_has_no_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         // Ensure no .claude/ dir in feature
         let feat_claude = project.join("login").join(".claude");
@@ -201,7 +201,7 @@ mod tests {
     fn pull_copies_main_to_feature() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let main_claude = paths::main_worktree(&project).join(".claude");
         write_json(&main_claude, "settings.json", r#"{"pulled":true}"#);
@@ -229,7 +229,7 @@ mod tests {
     fn pull_leaves_a_settings_file_the_branch_tracks() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         let feature = project.join("login");
         write_json(
             &feature.join(".claude"),
@@ -257,7 +257,7 @@ mod tests {
     fn pull_without_main_settings_is_a_no_op() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
         // Strip the Stop-hook settings.json seeded by `pm init`.
         let _ = std::fs::remove_dir_all(paths::main_worktree(&project).join(".claude"));
 
@@ -271,7 +271,7 @@ mod tests {
     fn push_overwrites_main_with_feature_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         // Main has old settings
         let main_claude = paths::main_worktree(&project).join(".claude");
@@ -291,7 +291,7 @@ mod tests {
     fn pull_overwrites_feature_with_main_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         // Feature has diverged settings
         let feat_claude = project.join("login").join(".claude");

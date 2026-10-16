@@ -65,8 +65,8 @@ mod tests {
     fn a_blocked_features_session_goes_to_the_agent_that_blocked_it() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project);
+        let (project, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
         let reviewer = server.spawn_idle_fake_agent(&project, &session, "login", "reviewer");
@@ -98,8 +98,8 @@ mod tests {
     fn a_session_goes_to_a_dead_agents_open_window_and_main_as_chosen() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project);
+        let (project, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
         let reviewer = server.spawn_dead_fake_agent(&project, &session, "login", "reviewer");
@@ -118,8 +118,8 @@ mod tests {
         use crate::state::runtime::{self, Waiting, WaitingKind};
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project);
+        let (project, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "main");
         let window = server.spawn_fake_agent(&project, &session, "main", "main");
         let plan = Waiting::now(WaitingKind::Plan, None);
@@ -137,8 +137,8 @@ mod tests {
     fn an_agent_is_read_and_reached_through_its_own_pane_when_its_window_is_split() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project);
+        let (project, projects_dir, project_name) =
+            server.setup_project_with_feature(dir.path(), "login");
         let session = tmux::session_name(&project_name, "login");
         let window = server.spawn_idle_fake_agent(&project, &session, "login", "implementer");
         let agent_pane = server.pane_id(&window);

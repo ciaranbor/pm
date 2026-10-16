@@ -218,7 +218,8 @@ fn record_start(
 mod tests {
     use super::*;
     use crate::harness::Harness;
-    use crate::state::agent::{AgentEntry, AgentType};
+    use crate::state::agent::AgentEntry;
+    use crate::testing::agent_entry;
     use tempfile::tempdir;
 
     fn started(session_id: &str) -> Payload {
@@ -253,13 +254,9 @@ mod tests {
         registry.register(
             agent_name,
             AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: agent_name.to_string(),
-                active: true,
                 agent_definition: agent_definition.map(String::from),
                 harness,
-                spawned_at: None,
+                ..agent_entry(agent_name)
             },
         );
         registry.save(&agents_dir, feature).unwrap();
@@ -425,7 +422,7 @@ mod tests {
         use crate::commands::agent_spawn::agent_spawn;
         let server = crate::testing::TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         agent_spawn(&project, "login", "reviewer", None, None, server.name()).unwrap();
         let transcript =
             || runtime::read_session_path(&project, "login", "reviewer", SessionPath::Transcript);

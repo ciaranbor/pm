@@ -267,7 +267,7 @@ impl TestServer {
         agent_name: &str,
         harness: crate::harness::Harness,
     ) {
-        use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+        use crate::state::agent::{AgentEntry, AgentRegistry};
         use crate::state::paths;
 
         let agents_dir = paths::agents_dir(project_root);
@@ -275,13 +275,8 @@ impl TestServer {
         registry.register(
             agent_name,
             AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: agent_name.to_string(),
-                active: true,
-                agent_definition: None,
                 harness,
-                spawned_at: None,
+                ..super::agent_entry(agent_name)
             },
         );
         registry.save(&agents_dir, feature).unwrap();

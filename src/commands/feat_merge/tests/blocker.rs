@@ -14,8 +14,7 @@ fn commit(repo: &Path, file: &str) {
 fn a_device_is_told_why_merge_is_off_whenever_the_cli_would_refuse_or_the_branch_is_behind() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
-    let registry = TestServer::registry_dir(&project);
+    let (project, registry, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
     let feature = project.join("login");
     let main = paths::main_worktree(&project);
     let blocker = || super::blocker(&project, &registry, "login").unwrap();
@@ -63,7 +62,7 @@ fn a_device_is_told_why_merge_is_off_whenever_the_cli_would_refuse_or_the_branch
 fn a_device_is_told_when_the_base_is_gone() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, registry) = server.setup_orphaned_child(dir.path());
+    let (project, registry, _) = server.setup_orphaned_child(dir.path());
 
     assert_eq!(
         super::blocker(&project, &registry, "child")
@@ -77,8 +76,7 @@ fn a_device_is_told_when_the_base_is_gone() {
 fn a_feature_already_merged_only_cleans_up_so_is_never_behind() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
-    let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
-    let registry = TestServer::registry_dir(&project);
+    let (project, registry, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
     TestServer::add_feature_commit(&project, "login");
     commit(&paths::main_worktree(&project), "upstream.txt");
     assert!(

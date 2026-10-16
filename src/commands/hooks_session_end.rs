@@ -73,7 +73,8 @@ fn end(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+    use crate::state::agent::AgentRegistry;
+    use crate::testing::agent_entry;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -82,18 +83,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = dir.path();
         let mut registry = AgentRegistry::default();
-        registry.register(
-            "qa",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "qa".into(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("qa", agent_entry("qa"));
         registry.save(&paths::agents_dir(root), "login").unwrap();
         let stamped = |agent: &str, reason: &str| {
             let payload = json!({"hook_event_name": "SessionEnd", "reason": reason});

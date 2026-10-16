@@ -89,55 +89,16 @@ pub fn msg_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent_spawn::test_support::setup_project;
     use crate::messages;
-    use crate::state::feature::{FeatureState, FeatureStatus};
-    use crate::state::project::{ProjectConfig, ProjectInfo};
-    use crate::testing::TestServer;
-    use chrono::Utc;
+    use crate::state::project::ProjectConfig;
+    use crate::testing::{TestServer, bare_project};
     use std::path::PathBuf;
     use tempfile::tempdir;
 
     fn setup_project_with_tmux(dir: &Path, server: &TestServer) -> (PathBuf, String, String) {
-        let root = dir.to_path_buf();
-        let pm_dir = root.join(".pm");
-        let project_name = server.scope("proj");
-        let feature_name = "login";
-
-        std::fs::create_dir_all(pm_dir.join("features")).unwrap();
-
-        let config = ProjectConfig {
-            project: ProjectInfo {
-                name: project_name.clone(),
-                max_features: None,
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
-        config.save(&pm_dir).unwrap();
-
-        let now = Utc::now();
-        let state = FeatureState {
-            status: FeatureStatus::Wip,
-            branch: feature_name.to_string(),
-            worktree: feature_name.to_string(),
-            base: "main".to_string(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            team: Default::default(),
-        };
-        state.save(&pm_dir.join("features"), feature_name).unwrap();
-
-        let worktree = root.join(feature_name);
-        std::fs::create_dir_all(&worktree).unwrap();
-
-        let session_name = crate::tmux::session_name(&project_name, feature_name);
-        crate::tmux::create_session(server.name(), &session_name, &worktree).unwrap();
-
-        (root, session_name, feature_name.to_string())
+        let (session, feature) = setup_project(dir, server);
+        (dir.to_path_buf(), session, feature)
     }
 
     fn create_agent_definition(root: &Path, agent_name: &str) {
@@ -148,16 +109,10 @@ mod tests {
         std::fs::write(&agent_def, "# agent stub").unwrap();
     }
 
-    fn setup_project_no_tmux(dir: &Path) -> PathBuf {
-        let root = dir.to_path_buf();
-        std::fs::create_dir_all(root.join(".pm/features")).unwrap();
-        root
-    }
-
     #[test]
     fn reply_no_last_read_errors() {
         let dir = tempdir().unwrap();
-        let root = setup_project_no_tmux(dir.path());
+        let root = bare_project(dir.path());
 
         let err = msg_reply(&root, &root, "login", "implementer", None, "hello", None).unwrap_err();
         assert!(format!("{err}").contains("No message to reply to"));

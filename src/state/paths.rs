@@ -301,6 +301,7 @@ pub fn resolve_scope_from(project_root: &Path, cwd: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::project_config;
     use tempfile::tempdir;
 
     #[test]
@@ -396,17 +397,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let root = dir.path().join("proj-dir");
         create_feature_state(&root, "login");
-        crate::state::project::ProjectConfig {
-            project: crate::state::project::ProjectInfo {
-                name: "proj".to_string(),
-                max_features: None,
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        }
-        .save(&pm_dir(&root))
-        .unwrap();
+        project_config("proj").save(&pm_dir(&root)).unwrap();
         let main = main_worktree(&root);
         let elsewhere = dir.path().join("other").join("main");
         for d in [&main, &elsewhere] {

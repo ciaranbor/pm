@@ -155,21 +155,18 @@ fn sessions_in_use(project_root: &Path, harness: Harness, tmux_server: Option<&s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+    use crate::state::agent::{AgentEntry, AgentRegistry};
     use crate::state::project::OpenCodeConfig;
-    use crate::testing::{TestServer, fake_opencode_calls, fake_opencode_sequence};
+    use crate::testing::{TestServer, agent_entry, fake_opencode_calls, fake_opencode_sequence};
     use crate::tmux;
     use tempfile::tempdir;
 
     fn opencode_agent(session_id: &str, window: &str, active: bool) -> AgentEntry {
         AgentEntry {
-            agent_type: AgentType::Agent,
             session_id: session_id.to_string(),
-            window_name: window.to_string(),
             active,
-            agent_definition: None,
             harness: Harness::OpenCode,
-            spawned_at: None,
+            ..agent_entry(window)
         }
     }
 

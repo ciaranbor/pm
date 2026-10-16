@@ -50,22 +50,15 @@ pub fn feat_pr_edit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::feature::{FeatureState, FeatureStatus};
+    use crate::state::feature::FeatureState;
+    use crate::testing::feature_state;
     use tempfile::tempdir;
 
     fn make_feature_state(pr: &str) -> FeatureState {
-        let now = chrono::Utc::now();
         FeatureState {
-            status: FeatureStatus::Wip,
-            branch: "test-branch".to_string(),
             worktree: "test".to_string(),
-            base: String::new(),
             pr: pr.to_string(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            team: Default::default(),
+            ..feature_state("test-branch")
         }
     }
 

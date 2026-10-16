@@ -648,7 +648,7 @@ mod tests {
     fn an_interrupt_with_messages_unread_starts_one_turn_and_with_none_nothing() {
         let server = crate::testing::TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let session = crate::tmux::session_name(&project_name, "login");
         server.spawn_recording_agent(&project, &session, "login", "implementer", Harness::Codex);
         let app_server = crate::testing::FakeAppServer::bind(dir.path());

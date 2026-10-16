@@ -464,7 +464,7 @@ mod tests {
     fn launches_across_scopes_are_watched_together_and_only_the_failed_ones_reported() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, project_name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir.path(), "login");
         let login = tmux::session_name(&project_name, "login");
         let main = tmux::session_name(&project_name, "main");
         server.spawn_fake_agent(&project, &login, "login", "up");

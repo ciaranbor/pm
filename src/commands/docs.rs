@@ -209,18 +209,13 @@ fn listing(listed: &[docs::Listed]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::bare_project;
     use tempfile::tempdir;
 
-    fn setup_project(dir: &std::path::Path) -> std::path::PathBuf {
-        let root = dir.to_path_buf();
-        std::fs::create_dir_all(root.join(".pm").join("features")).unwrap();
-        std::fs::create_dir_all(paths::main_worktree(&root)).unwrap();
-        root
-    }
     #[test]
     fn bootstrap_creates_docs_directory() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         bootstrap(&root).unwrap();
 
@@ -230,7 +225,7 @@ mod tests {
     #[test]
     fn bootstrap_creates_categories_toml() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         bootstrap(&root).unwrap();
 
@@ -263,7 +258,7 @@ mod tests {
     #[test]
     fn bootstrap_reconciles_missing_default_into_existing_categories_toml() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         // Simulate a project created before findings existed: categories.toml
         // lists only the original three categories.
@@ -304,7 +299,7 @@ mod tests {
     #[test]
     fn bootstrap_creates_default_category_files() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         bootstrap(&root).unwrap();
 
@@ -324,7 +319,7 @@ mod tests {
     #[test]
     fn bootstrap_does_not_create_git_repo() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         bootstrap(&root).unwrap();
 
@@ -335,7 +330,7 @@ mod tests {
     #[test]
     fn bootstrap_is_idempotent() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
 
         bootstrap(&root).unwrap();
 
@@ -353,7 +348,7 @@ mod tests {
     #[test]
     fn show_names_a_category_with_or_without_its_extension() {
         let dir = tempdir().unwrap();
-        let root = setup_project(dir.path());
+        let root = bare_project(dir.path());
         bootstrap(&root).unwrap();
         std::fs::write(paths::docs_dir(&root).join("todo.md"), "# Todo\n- a\n").unwrap();
 

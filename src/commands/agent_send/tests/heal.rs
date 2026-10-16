@@ -1,4 +1,5 @@
 use super::*;
+use crate::testing::agent_entry;
 
 #[test]
 fn send_to_active_dead_window_queues_and_respawns() {
@@ -181,13 +182,8 @@ fn send_delivers_when_heal_fails() {
     registry.register(
         "reviewer",
         AgentEntry {
-            agent_type: AgentType::Agent,
-            session_id: String::new(),
-            window_name: "reviewer".to_string(),
-            active: true,
-            agent_definition: None,
             harness: Default::default(),
-            spawned_at: None,
+            ..agent_entry("reviewer")
         },
     );
     registry.save(&agents_dir, "login").unwrap();

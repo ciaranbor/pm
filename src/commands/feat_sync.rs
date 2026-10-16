@@ -110,21 +110,14 @@ mod tests {
     use super::*;
     use crate::gh::PrInfo;
     use crate::state::feature::FeatureStatus;
-    use chrono::Utc;
+    use crate::testing::feature_state;
     use tempfile::tempdir;
 
     fn make_feature(status: FeatureStatus, pr: &str) -> FeatureState {
         FeatureState {
             status,
-            branch: "test-branch".to_string(),
-            worktree: "test-branch".to_string(),
-            base: String::new(),
             pr: pr.to_string(),
-            context: String::new(),
-            workflow: None,
-            created: Utc::now(),
-            last_active: Utc::now(),
-            team: Default::default(),
+            ..feature_state("test-branch")
         }
     }
 

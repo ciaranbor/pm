@@ -342,7 +342,7 @@ fn global_files(config_dir: &Path) -> Files {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::TestServer;
+    use crate::testing::{TestServer, project_entry};
     use tempfile::tempdir;
 
     fn status(harness: Harness, problems: &[&str]) -> Readiness {
@@ -443,12 +443,7 @@ mod tests {
 
         let elsewhere = dir.path().join("elsewhere");
         std::fs::create_dir_all(paths::main_worktree(&elsewhere)).unwrap();
-        let mut entry = ProjectEntry {
-            root: elsewhere.display().to_string(),
-            main_branch: "main".into(),
-            repo_url: None,
-            state_remote: None,
-        };
+        let mut entry = project_entry(&elsewhere);
         entry.save(&projects_dir, HOME_NAME).unwrap();
         assert!(matches!(
             find(&projects_dir, &root),

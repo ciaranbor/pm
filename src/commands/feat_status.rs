@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn ready_without_summary_is_refused_and_tells_no_one() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let err = feat_status(
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn ready_with_summary_notifies_main_from_the_agent_in_its_scope() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         std::fs::write(
             crate::commands::feat_summary::path(&project, "login").unwrap(),
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn ready_with_an_empty_summary_is_refused() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         std::fs::write(
             crate::commands::feat_summary::path(&project, "login").unwrap(),
@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn blocked_and_wip_tell_no_one() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
 
         feat_status(
@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn a_blocked_reason_and_its_agent_are_kept_until_the_status_changes() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         let blocked = |project: &Path| {
             let team = TeamStatus::load(project, "login").unwrap();
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn main_is_blocked_or_wip_never_ready_and_tells_no_one() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
 
         feat_status(
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn a_reason_with_any_status_but_blocked_is_refused() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         std::fs::write(
             crate::commands::feat_summary::path(&project, "login").unwrap(),
@@ -384,7 +384,7 @@ mod tests {
     #[test]
     fn request_reads_a_word_as_a_status_else_as_a_feature() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         let req = |status: Option<&str>, name: Option<&str>, reason| {
             request(

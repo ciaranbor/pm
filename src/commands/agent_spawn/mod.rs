@@ -330,12 +330,9 @@ fn spawn_agent(
 #[cfg(test)]
 pub(crate) mod test_support {
     use crate::harness::Harness;
-    use crate::state::feature::{FeatureState, FeatureStatus};
     use crate::state::paths;
-    use crate::state::project::ProjectConfig;
     use crate::testing::TestServer;
     use crate::tmux;
-    use chrono::Utc;
     use std::path::Path;
 
     /// Record session `id` for `name`, with the conversation a resume
@@ -369,41 +366,21 @@ pub(crate) mod test_support {
         }
     }
 
+    /// A hand-built project at `dir` (no git) with a `login` feature, stub
+    /// definitions for `reviewer`, `tester` and `implementer`, and the
+    /// feature's tmux session, returning `(session name, feature name)`.
     pub(crate) fn setup_project(dir: &Path, server: &TestServer) -> (String, String) {
-        let root = dir.to_path_buf();
+        let root = crate::testing::bare_project(dir);
         let pm_dir = root.join(".pm");
         let project_name = server.scope("proj");
         let feature_name = "login";
 
-        std::fs::create_dir_all(pm_dir.join("features")).unwrap();
-
-        // Write project config
-        let config = ProjectConfig {
-            project: crate::state::project::ProjectInfo {
-                name: project_name.clone(),
-                max_features: None,
-                fresh_base: None,
-            },
-            agents: Default::default(),
-            harness: Default::default(),
-        };
-        config.save(&pm_dir).unwrap();
-
-        // Create feature state
-        let now = Utc::now();
-        let state = FeatureState {
-            status: FeatureStatus::Wip,
-            branch: feature_name.to_string(),
-            worktree: feature_name.to_string(),
-            base: String::new(),
-            pr: String::new(),
-            context: String::new(),
-            workflow: None,
-            created: now,
-            last_active: now,
-            team: Default::default(),
-        };
-        state.save(&pm_dir.join("features"), feature_name).unwrap();
+        crate::testing::project_config(&project_name)
+            .save(&pm_dir)
+            .unwrap();
+        crate::testing::feature_state(feature_name)
+            .save(&pm_dir.join("features"), feature_name)
+            .unwrap();
 
         // Create worktree directory (simulated)
         let worktree = root.join(feature_name);

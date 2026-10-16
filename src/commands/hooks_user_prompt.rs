@@ -164,7 +164,7 @@ fn on_user_prompt(
 mod tests {
     use super::*;
     use crate::commands::agent_spawn::{RESUME_PROMPT, SPAWN_PROMPT};
-    use crate::testing::TestServer;
+    use crate::testing::{TestServer, agent_entry};
     use tempfile::tempdir;
 
     fn state(project: &Path) -> TeamStatus {
@@ -172,7 +172,7 @@ mod tests {
     }
 
     fn blocked_feature(dir: &Path) -> std::path::PathBuf {
-        let (project, _) = TestServer::new().setup_project_with_feature_no_tmux(dir, "login");
+        let (project, _, _) = TestServer::new().setup_project_with_feature_no_tmux(dir, "login");
         feat_status(
             &project,
             "login",
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn a_feature_that_is_not_blocked_is_left_alone() {
         let dir = tempdir().unwrap();
-        let (project, _) =
+        let (project, _, _) =
             TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
         std::fs::write(
             crate::commands::feat_summary::path(&project, "login").unwrap(),
@@ -331,23 +331,11 @@ mod tests {
     #[test]
     fn a_prompt_ends_an_interrupt_the_transcript_still_shows() {
         use crate::commands::running_agents::waiting;
-        use crate::state::agent::{AgentEntry, AgentType};
         use crate::state::runtime::{SessionPath, WaitingKind};
         let dir = tempdir().unwrap();
         let project = blocked_feature(dir.path());
         let mut registry = AgentRegistry::default();
-        registry.register(
-            "implementer",
-            AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "implementer".into(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
+        registry.register("implementer", agent_entry("implementer"));
         registry
             .save(&paths::agents_dir(&project), "login")
             .unwrap();
@@ -371,18 +359,13 @@ mod tests {
     }
 
     fn register(project: &Path, harness: Harness) {
-        use crate::state::agent::{AgentEntry, AgentType};
+        use crate::state::agent::AgentEntry;
         let mut registry = AgentRegistry::default();
         registry.register(
             "implementer",
             AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "implementer".into(),
-                active: true,
-                agent_definition: None,
                 harness,
-                spawned_at: None,
+                ..agent_entry("implementer")
             },
         );
         registry.save(&paths::agents_dir(project), "login").unwrap();

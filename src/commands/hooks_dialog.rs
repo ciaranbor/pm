@@ -655,7 +655,7 @@ mod tests {
     fn a_dialog_no_hook_holds_is_answered_by_typing_its_harnesss_reply() {
         let server = crate::testing::TestServer::new();
         let dir = tempdir().unwrap();
-        let (root, name) = server.setup_project_with_feature(dir.path(), "login");
+        let (root, _, name) = server.setup_project_with_feature(dir.path(), "login");
         let (_, received) = server.spawn_recording_agent(
             &root,
             &crate::tmux::session_name(&name, "login"),

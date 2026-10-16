@@ -95,7 +95,7 @@ mod tests {
     fn list_shows_feature_settings() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(
@@ -114,7 +114,7 @@ mod tests {
     fn list_skips_settings_local_json() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         let feat_claude = project.join("login").join(".claude");
         write_json(&feat_claude, "settings.json", r#"{"a":1}"#);
@@ -131,7 +131,7 @@ mod tests {
     fn list_returns_empty_when_no_claude_dir() {
         let dir = tempdir().unwrap();
         let server = TestServer::new();
-        let (project, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        let (project, _, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
 
         // Remove .claude/ if seeded
         let feat_claude = project.join("login").join(".claude");

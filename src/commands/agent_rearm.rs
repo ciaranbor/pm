@@ -129,7 +129,7 @@ mod tests {
         dir: &Path,
         marker: WaitingKind,
     ) -> (std::path::PathBuf, String) {
-        let (project, project_name) = server.setup_project_with_feature(dir, "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir, "login");
         let session = tmux::session_name(&project_name, "login");
         let target = server.spawn_prompting_fake_agent(&project, &session, "login", "implementer");
         server.wait_for_pane_text(&target, "❯");
@@ -221,7 +221,7 @@ mod tests {
         crate::testing::FakeAppServer,
         std::path::PathBuf,
     ) {
-        let (project, project_name) = server.setup_project_with_feature(dir, "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir, "login");
         let session = tmux::session_name(&project_name, "login");
         let (_, received) = server.spawn_recording_agent(
             &project,
@@ -276,7 +276,7 @@ mod tests {
         dir: &Path,
         url: &str,
     ) -> (std::path::PathBuf, std::path::PathBuf) {
-        let (project, project_name) = server.setup_project_with_feature(dir, "login");
+        let (project, _, project_name) = server.setup_project_with_feature(dir, "login");
         let session = tmux::session_name(&project_name, "login");
         let (_, received) = server.spawn_recording_agent(
             &project,
@@ -380,7 +380,7 @@ mod tests {
     fn a_session_that_reported_no_channel_is_left_unarmed_and_untyped_with_a_warning() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, name) = server.setup_project_with_feature(dir.path(), "login");
+        let (project, _, name) = server.setup_project_with_feature(dir.path(), "login");
         let (_, received) = server.spawn_recording_agent(
             &project,
             &tmux::session_name(&name, "login"),

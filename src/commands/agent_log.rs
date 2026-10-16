@@ -129,10 +129,11 @@ fn cut(out: &mut String, text: &str) {
 
 #[cfg(test)]
 mod tests {
+    use crate::testing::agent_entry;
     use tempfile::tempdir;
 
     use super::log;
-    use crate::state::agent::{AgentEntry, AgentRegistry, AgentType};
+    use crate::state::agent::{AgentEntry, AgentRegistry};
     use crate::state::paths;
     use crate::state::runtime::{self, SessionPath};
     use crate::testing::TestServer;
@@ -146,13 +147,8 @@ mod tests {
         registry.register(
             "worker",
             AgentEntry {
-                agent_type: AgentType::Agent,
                 session_id: "s1".to_string(),
-                window_name: "worker".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: crate::harness::Harness::ClaudeCode,
-                spawned_at: None,
+                ..agent_entry("worker")
             },
         );
         registry.save(&agents_dir, "main").unwrap();
