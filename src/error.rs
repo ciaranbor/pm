@@ -179,6 +179,9 @@ pub enum PmError {
     )]
     WorkflowAutoSpawn { path: PathBuf },
 
+    #[error("{}: {reason}", .path.display())]
+    WorkflowConfigMalformed { path: PathBuf, reason: String },
+
     #[error("Agent error: {0}")]
     Agent(String),
 

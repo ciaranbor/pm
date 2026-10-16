@@ -449,6 +449,17 @@ fn a_waiter_whose_harness_is_gone_ends_and_marks_nothing() {
 fn wakes_that_never_drain_the_inbox_stop_the_loop_and_say_so() {
     let dir = tempdir().unwrap();
     project(dir.path());
+    pm::state::project::ProjectConfig {
+        project: pm::state::project::ProjectInfo {
+            name: "proj".into(),
+            max_features: None,
+            fresh_base: None,
+        },
+        agents: Default::default(),
+        harness: Default::default(),
+    }
+    .save(&paths::pm_dir(dir.path()))
+    .unwrap();
     send(dir.path());
     let run = || {
         let mut hook = waiter(dir.path());
@@ -464,7 +475,10 @@ fn wakes_that_never_drain_the_inbox_stop_the_loop_and_say_so() {
     assert_eq!(out.status.code(), Some(2));
     let notice = String::from_utf8_lossy(&out.stderr).to_string();
     assert!(
-        notice.starts_with("pm: never-idle loop stopped: 5 consecutive wakes"),
+        notice.starts_with("pm: never-idle loop stopped: 5 consecutive wakes")
+            && notice.ends_with(
+                "restart it with `pm agent restart implementer --scope main --project proj`."
+            ),
         "{notice}"
     );
     assert!(runtime::loop_tripped(dir.path(), "main", AGENT).is_some());

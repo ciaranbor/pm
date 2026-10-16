@@ -179,7 +179,11 @@ mod tests {
         let version = crate::version::VERSION;
         let warnings =
             |facts: &Facts| facts.warnings(exe, version, |_| panic!("no device is paired"));
-        assert!(warnings(&Facts::read(&home, &config, 7764)).is_empty());
+        // A probe of the lock takes it for a moment, and a process another
+        // test forks then holds it until it execs: each probe that expects
+        // the lock free gets files of its own, and taking it waits.
+        let unprobed = ServeFiles::new(dir.path().join("unprobed"), dir.path().join("unprobed"));
+        assert!(warnings(&Facts::read(&home, &unprobed, 7764)).is_empty());
 
         let plist = format!(
             "<key>ProgramArguments</key><array><string>{}</string></array>",
@@ -199,7 +203,7 @@ mod tests {
             "a state.json without the lock held is a dead server: {found:?}"
         );
 
-        let _running = state::lock(&config).unwrap().unwrap();
+        let _running = state::wait(&config).unwrap();
         std::fs::write(plist_path(&home), plist.replace("/usr/local", "/opt/old")).unwrap();
         let found = warnings(&Facts::read(&home, &config, 7764));
         assert_eq!(found.len(), 1, "{found:?}");

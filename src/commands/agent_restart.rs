@@ -95,6 +95,12 @@ fn restart_one(
     Ok((line, kept))
 }
 
+/// The command that restarts `agent` of `scope` in `project`, quoted for a
+/// message; it names both, so it runs from anywhere.
+pub(crate) fn restart_command(project: &str, scope: &str, agent: &str) -> String {
+    format!("`pm agent restart {agent} --scope {scope} --project {project}`")
+}
+
 /// The report line for an agent that was stopped and respawned.
 pub(super) fn restarted_line(agent_name: &str, outcome: SpawnOutcome, notes: &[String]) -> String {
     let resumed = if outcome == SpawnOutcome::Resumed {

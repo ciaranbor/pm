@@ -35,6 +35,7 @@ pub const DEFAULT_ORCHESTRATOR: &str = "main";
 /// The definition main's orchestrator runs: the lead (first) of
 /// [`MAIN_WORKFLOW`]'s team, so a project that shadows the workflow with
 /// another lead gets it everywhere pm treats the orchestrator specially.
+/// `pm doctor` reports a workflow that fails to load, and names this fallback.
 pub fn orchestrator_definition(project_root: &Path) -> String {
     WorkflowDef::load(project_root, MAIN_WORKFLOW)
         .ok()

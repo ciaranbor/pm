@@ -10,12 +10,12 @@ use crate::error::Result;
 use crate::harness::{ConfigIssueKind, Harness};
 use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
-use crate::state::paths;
 use crate::state::project::{
     AgentsConfig, CodexConfig, GlobalConfig, ProjectConfig, WILDCARD_AGENT, harness_config,
     resolve_agent_settings,
 };
 use crate::state::workflow::{self, LEGACY_VANILLA_AGENT, VANILLA_AGENT};
+use crate::state::{paths, scope};
 
 /// Main-scope findings about what each harness in use is configured with:
 /// agents it will refuse for want of a model row or remarks on at spawn,
@@ -193,6 +193,33 @@ pub(super) fn agents_configs(project_root: &Path) -> Result<(AgentsConfig, Agent
         Err(e) => return Err(e),
     };
     Ok((project, GlobalConfig::load_or_default().agents))
+}
+
+/// Main-scope findings for each installed workflow, in either tier, whose
+/// `config.toml` fails to load: no feature can start on it.
+pub(super) fn workflow_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
+    let global = workflow::global_dir()?;
+    let installed = workflow::list_installed_in(Some(project_root), &global)?;
+    Ok(installed
+        .errors
+        .into_iter()
+        // A directory without a `config.toml` is no workflow to load.
+        .filter(|(name, _)| workflow::resolve_dir(Some(project_root), name, &global).is_some())
+        .map(|(name, error)| {
+            let mut message = format!("workflow '{name}' fails to load: {error}");
+            if name == scope::MAIN_WORKFLOW {
+                message.push_str(&format!(
+                    " (until it loads, pm takes main's orchestrator to be '{}')",
+                    scope::DEFAULT_ORCHESTRATOR
+                ));
+            }
+            Issue {
+                kind: IssueKind::WorkflowConfigInvalid,
+                message,
+                fix: Fix::None,
+            }
+        })
+        .collect())
 }
 
 /// Each worktree on disk with the definitions launched in it: those of its
@@ -479,5 +506,56 @@ mod tests {
         std::fs::create_dir_all(&defs).unwrap();
         std::fs::write(defs.join("default.md"), "stub").unwrap();
         assert!(legacy_vanilla_row_issues(&project_path).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_workflow_whose_config_fails_to_load_is_reported_naming_its_file() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, _, _) = server.setup_project_no_tmux(dir.path());
+        let workflows = paths::workflows_dir(&project_path);
+        let write = |name: &str, body: &str| {
+            std::fs::create_dir_all(workflows.join(name)).unwrap();
+            std::fs::write(workflows.join(name).join("config.toml"), body).unwrap();
+        };
+        write("good", "description = \"ok\"\n");
+        write("broken", "description = \"unclosed\n");
+        write(
+            "old",
+            "description = \"ok\"\nauto_spawn = [\"implementer\"]\n",
+        );
+        write(scope::MAIN_WORKFLOW, "agents = [\"supervisor\"]\n");
+        std::fs::create_dir_all(workflows.join("notes-only")).unwrap();
+
+        let found = messages(
+            &workflow_config_issues(&project_path).unwrap(),
+            IssueKind::WorkflowConfigInvalid,
+        );
+        let config = |name: &str| workflows.join(name).join("config.toml");
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(
+            found[0]
+                == format!(
+                    "workflow 'broken' fails to load: {}: invalid basic string, expected `\"` \
+                     (line 1, column 24)",
+                    config("broken").display()
+                ),
+            "{found:?}"
+        );
+        assert!(
+            found[1].starts_with(&format!(
+                "workflow 'old' fails to load: {} sets `auto_spawn`",
+                config("old").display()
+            )),
+            "{found:?}"
+        );
+        assert!(
+            found[2].starts_with(&format!(
+                "workflow 'orchestrator' fails to load: {}: ",
+                config("orchestrator").display()
+            )) && found[2].ends_with("(until it loads, pm takes main's orchestrator to be 'main')"),
+            "{found:?}"
+        );
+        assert_eq!(scope::orchestrator_definition(&project_path), "main");
     }
 }

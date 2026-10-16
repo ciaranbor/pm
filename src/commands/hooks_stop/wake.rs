@@ -38,7 +38,7 @@ use crate::commands::attention::AgentState;
 use crate::commands::hook_process::Caller;
 use crate::commands::msg_scheduled::Sweeper;
 use crate::commands::running_agents::AgentAt;
-use crate::commands::{hooks_dialog, hooks_user_prompt, hooks_waiting};
+use crate::commands::{agent_restart, hooks_dialog, hooks_user_prompt, hooks_waiting};
 use crate::error::Result;
 use crate::harness::{Harness, Wake};
 use crate::messages;
@@ -59,10 +59,10 @@ pub(crate) fn is_loop_notice(prompt: &str) -> bool {
     prompt.trim_start().starts_with(NOTICE_START)
 }
 
-fn notice(agent: &str, why: &str) -> String {
+fn notice(project_root: &Path, scope: &str, agent: &str, why: &str) -> String {
     format!(
-        "{NOTICE_START}{why}. This agent no longer wakes for messages; restart it with \
-         `pm agent restart {agent}`."
+        "{NOTICE_START}{why}. This agent no longer wakes for messages; restart it with {}.",
+        agent_restart::restart_command(&paths::project_name(project_root), scope, agent)
     )
 }
 
@@ -354,7 +354,7 @@ fn wait(
     if let Some(why) = trips(project_root, scope, agent, immediate, read)? {
         log(&format!("breaker tripped: {why}"));
         runtime::trip_loop(project_root, scope, agent, &why)?;
-        return Ok(Waited::Wake(notice(agent, &why)));
+        return Ok(Waited::Wake(notice(project_root, scope, agent, &why)));
     }
     log(if immediate {
         "messages unread as it started: wakes the agent"

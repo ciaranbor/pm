@@ -6,6 +6,9 @@ pub fn ellipsize(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
     }
+    if max == 0 {
+        return String::new();
+    }
     let (end, _) = text
         .char_indices()
         .nth(max.saturating_sub(1))
@@ -52,6 +55,8 @@ mod tests {
         assert_eq!(ellipsize("the quick brown fox", 12), "the quick…");
         assert_eq!(ellipsize("abcdefghijklmnop", 6), "abcde…");
         assert_eq!(ellipsize("ééééééé", 4), "ééé…");
+        assert_eq!(ellipsize("abc", 1), "…");
+        assert_eq!(ellipsize("abc", 0), "");
     }
 
     #[test]

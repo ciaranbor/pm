@@ -26,6 +26,7 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::BranchMissing
         | IssueKind::StuckInitializing
         | IssueKind::WorkflowDirMissing
+        | IssueKind::WorkflowConfigInvalid
         | IssueKind::PrMerged
         | IssueKind::PrClosed
         | IssueKind::PrCheckFailed
@@ -220,7 +221,9 @@ mod tests {
         let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
-            warnings[0].ends_with("(run `pm agent restart reviewer --scope login`)"),
+            warnings[0].ends_with(&format!(
+                "(run `pm agent restart reviewer --scope login --project {project_name}`)"
+            )),
             "{warnings:?}"
         );
     }

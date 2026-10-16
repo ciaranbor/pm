@@ -105,9 +105,20 @@ impl Phone {
         self.tmp.path().join(name)
     }
 
-    /// Start `hold -- CMD` in its own process group, as a terminal would.
+    /// Start `hold -- CMD` in its own process group with SIGINT at its
+    /// default, as a terminal would. A test run started in the background
+    /// inherits SIGINT ignored, and bash cannot trap a signal ignored on
+    /// entry.
     fn spawn_wrapper(&self, cmd: &[&str]) -> Child {
-        self.command(&[&["hold", "--"], cmd].concat())
+        let mut command = self.command(&[&["hold", "--"], cmd].concat());
+        // SAFETY: signal() is async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                libc::signal(libc::SIGINT, libc::SIG_DFL);
+                Ok(())
+            });
+        }
+        command
             .process_group(0)
             .stdout(Stdio::null())
             .stderr(Stdio::null())

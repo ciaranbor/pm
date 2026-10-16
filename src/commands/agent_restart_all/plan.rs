@@ -1,7 +1,7 @@
 //! What a sweep would do, decided from one scan of the server: which
 //! agents restart now, which at their next idle, and which not at all.
 
-use crate::commands::agent_restart::callers_agent;
+use crate::commands::agent_restart::{self, callers_agent};
 use crate::commands::attention::{AgentState, scope_agents_in};
 use crate::commands::running_agents::Windows;
 use crate::error::{PmError, Result};
@@ -232,7 +232,7 @@ pub(super) fn held_back(scope: &Scope, agent: &str, why: &str) -> Report {
 
 /// The command that restarts `agent` of `scope`, quoted for a report line.
 pub(super) fn restart_command(scope: &Scope, agent: &str) -> String {
-    format!("`pm agent restart {agent} --scope {}`", scope.name)
+    agent_restart::restart_command(&scope.project, &scope.name, agent)
 }
 
 /// Why restarting an agent in `state` would cut its turn short.

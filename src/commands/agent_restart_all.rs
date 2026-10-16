@@ -553,7 +553,7 @@ mod tests {
             lines.contains(&format!(
                 "{session}: Skipped agent 'reviewer': it is configured for codex now, so a \
                  restart starts a fresh conversation instead of resuming its claude-code one; \
-                 `pm agent restart reviewer --scope login` does that"
+                 `pm agent restart reviewer --scope login --project {project_name}` does that"
             )),
             "{lines:#?}"
         );
@@ -721,7 +721,7 @@ mod tests {
                 "{session}: Skipped agent 'reviewer': not restarted, since {session}'s agent \
                  'implementer', also on claude-code, did not come up after its restart (it has \
                  drawn nothing); restart it once that clears with \
-                 `pm agent restart reviewer --scope login`"
+                 `pm agent restart reviewer --scope login --project {project_name}`"
             )
         );
         assert!(

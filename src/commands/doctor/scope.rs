@@ -5,7 +5,9 @@ use std::path::Path;
 
 use super::agents::{agent_issues, legacy_vanilla_agent_issues};
 use super::assets::{DefinitionProjections, asset_issues, feature_projection_issues};
-use super::config::{harness_config_issues, legacy_vanilla_row_issues, unread_key_issues};
+use super::config::{
+    harness_config_issues, legacy_vanilla_row_issues, unread_key_issues, workflow_config_issues,
+};
 use super::hooks::hook_issues;
 use super::{Depth, Finding, Fix, FixAction, Issue, IssueKind, PROJECT};
 use crate::commands::bundled_disable::Disabled;
@@ -212,6 +214,7 @@ fn project_issues(
     let mut issues = hook_issues(project_root, probe)?;
     issues.extend(harness_config_issues(project_root)?);
     issues.extend(unread_key_issues(project_root));
+    issues.extend(workflow_config_issues(project_root)?);
     issues.extend(legacy_vanilla_row_issues(project_root)?);
     issues.extend(asset_issues(project_root, projections)?);
     issues.extend(
