@@ -7,7 +7,7 @@
 //! `--from` path are carried to the new worktree
 //! ([`harness_migrate`](super::harness_migrate)).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 
@@ -125,7 +125,9 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
         if params.from.is_some() {
             if existing_wt.exists() {
                 let timestamp = Utc::now().format("%Y%m%d%H%M%S");
-                let backup = existing_wt.with_extension(format!("bak.{timestamp}"));
+                let mut backup = existing_wt.clone().into_os_string();
+                backup.push(format!(".bak.{timestamp}"));
+                let backup = PathBuf::from(backup);
                 std::fs::rename(&existing_wt, &backup)?;
                 eprintln!(
                     "Moved existing worktree {} → {}",
@@ -744,8 +746,9 @@ mod tests {
         let (project_path, projects_dir, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
 
-        // Create an existing worktree for the branch (simulating a pre-existing checkout)
-        let old_worktree = dir.path().canonicalize().unwrap().join("old-checkout");
+        // A pre-existing checkout, named with a dot so its backup must keep
+        // the whole name.
+        let old_worktree = dir.path().canonicalize().unwrap().join("old-checkout.v2");
         let main_wt = paths::main_worktree(&project_path);
         git::add_worktree(&main_wt, &old_worktree, "login").unwrap();
         assert!(old_worktree.exists());
@@ -781,7 +784,7 @@ mod tests {
             .filter(|e| {
                 e.file_name()
                     .to_string_lossy()
-                    .starts_with("old-checkout.bak.")
+                    .starts_with("old-checkout.v2.bak.")
             })
             .collect();
         assert_eq!(backups.len(), 1, "expected exactly one timestamped backup");
