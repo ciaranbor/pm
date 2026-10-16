@@ -8,6 +8,12 @@ pub mod keys;
 pub mod options;
 pub mod panes;
 pub mod paste;
+mod process;
+
+pub use panes::{
+    Pane, agent_panes, capture_pane, capture_visible, mark_agent_pane, pane_command, pane_processes,
+};
+pub use process::{Process, ProcessTable};
 
 /// Single source of truth for the tmux session naming convention.
 /// Returns `"{project_name}/{scope}"`.
@@ -393,200 +399,6 @@ pub fn kill_window(server: Option<&str>, target: &str) -> Result<()> {
     Ok(())
 }
 
-/// A process as `ps` saw it. The start time tells a pid's process apart
-/// from a later one the pid was reused for.
-#[derive(Debug, Clone)]
-pub struct Process {
-    pub pid: u32,
-    started: String,
-    /// The command line, its arguments separated by single spaces.
-    pub command: String,
-    /// Whether it is in its terminal's foreground process group: for a
-    /// pane's shell, whether it is at its prompt rather than running a job.
-    pub foreground: bool,
-    /// Whether it was asleep: for a pane's shell at its prompt with no job
-    /// in the foreground, whether it is waiting for input.
-    pub asleep: bool,
-}
-
-/// A process can rewrite its own command line, so it is not part of what
-/// makes two sightings the same process.
-impl PartialEq for Process {
-    fn eq(&self, other: &Self) -> bool {
-        self.pid == other.pid && self.started == other.started
-    }
-}
-
-impl Eq for Process {}
-
-#[cfg(test)]
-impl Process {
-    pub fn new_for_test(pid: u32, command: &str) -> Self {
-        Self {
-            pid,
-            started: String::new(),
-            command: command.to_string(),
-            foreground: true,
-            asleep: false,
-        }
-    }
-}
-
-/// Every process on the machine, read once so that several panes can be
-/// walked against one `ps` run.
-pub struct ProcessTable(Vec<(Process, u32)>);
-
-impl ProcessTable {
-    pub fn read() -> Result<Self> {
-        let table = Command::new("ps")
-            .args(["-A", "-o", "pid=,ppid=,pgid=,tpgid=,stat=,lstart=,command="])
-            .output()?;
-        Ok(Self(
-            String::from_utf8_lossy(&table.stdout)
-                .lines()
-                .filter_map(|line| {
-                    let mut fields = line.split_whitespace();
-                    let pid = fields.next()?.parse().ok()?;
-                    let ppid = fields.next()?.parse().ok()?;
-                    let pgid: i64 = fields.next()?.parse().ok()?;
-                    let tpgid: i64 = fields.next()?.parse().ok()?;
-                    // `S` sleeping, `I` idle (macOS: asleep over 20 s).
-                    let asleep = fields.next()?.starts_with(['S', 'I']);
-                    // `lstart` is always five fields: `Wed Oct  1 16:47:56 2026`.
-                    let started: Vec<&str> = fields.by_ref().take(5).collect();
-                    if started.len() < 5 {
-                        return None;
-                    }
-                    let process = Process {
-                        pid,
-                        started: started.join(" "),
-                        command: fields.collect::<Vec<_>>().join(" "),
-                        foreground: pgid == tpgid,
-                        asleep,
-                    };
-                    Some((process, ppid))
-                })
-                .collect(),
-        ))
-    }
-
-    /// The process `root` and its descendants.
-    pub fn tree(&self, root: u32) -> Vec<Process> {
-        let mut found: Vec<Process> = self
-            .0
-            .iter()
-            .filter(|(process, _)| process.pid == root)
-            .map(|(process, _)| process.clone())
-            .collect();
-        let mut at = 0;
-        while at < found.len() {
-            let parent = found[at].pid;
-            for (process, ppid) in &self.0 {
-                if *ppid == parent && !found.contains(process) {
-                    found.push(process.clone());
-                }
-            }
-            at += 1;
-        }
-        found
-    }
-}
-
-/// The pane option that marks the pane pm started an agent's harness in.
-/// A user may split an agent's window and run anything beside it, and tmux
-/// renumbers panes as they are split, so neither the active pane nor the
-/// first is necessarily the agent's.
-const AGENT_PANE: &str = "@pm_agent_pane";
-
-/// Mark the active pane of `window`, a window pm just made for an agent,
-/// as the agent's pane.
-pub fn mark_agent_pane(server: Option<&str>, window: &str) -> Result<()> {
-    run_tmux(
-        server,
-        &["set-option", "-p", "-t", &exact(window), AGENT_PANE, "1"],
-    )?;
-    Ok(())
-}
-
-/// The processes running in a window's agent pane: the pane's own and its
-/// descendants, which is where a harness started from the pane's shell is.
-pub fn pane_processes(server: Option<&str>, target: &str) -> Result<Vec<Process>> {
-    let Some(pane) = agent_pane(server, target)? else {
-        return Ok(Vec::new());
-    };
-    Ok(ProcessTable::read()?.tree(pane.pid))
-}
-
-/// `window`'s agent pane, as [`agent_panes`] reads it.
-fn agent_pane(server: Option<&str>, window: &str) -> Result<Option<Pane>> {
-    let output = run_tmux_untrimmed(
-        server,
-        &["list-panes", "-t", &exact(window), "-F", &pane_format()],
-    )?;
-    Ok(agent_panes_in(&output).into_iter().next())
-}
-
-/// The id of `window`'s agent pane, for commands that would otherwise act
-/// on its active pane; the window itself when it has none.
-fn agent_pane_target(server: Option<&str>, window: &str) -> Result<String> {
-    Ok(agent_pane(server, window)?.map_or_else(|| window.to_string(), |p| p.id))
-}
-
-/// A window's agent pane, as [`agent_panes`] lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Pane {
-    pub session: String,
-    pub window_name: String,
-    /// The window's target, `session:index`.
-    pub window: String,
-    /// The pane's id, `%N`.
-    pub id: String,
-    pub pid: u32,
-}
-
-/// What [`agent_panes_in`] reads of each pane. Its last field is empty for
-/// an unmarked pane, so its output must not be trimmed.
-fn pane_format() -> String {
-    format!(
-        "#{{session_name}}\t#{{window_name}}\t#{{session_name}}:#{{window_index}}\t#{{pane_id}}\t#{{pane_pid}}\t#{{{AGENT_PANE}}}"
-    )
-}
-
-/// The agent pane of every window on the server, from one `list-panes -a`.
-/// No server running lists none.
-pub fn agent_panes(server: Option<&str>) -> Result<Vec<Pane>> {
-    match run_tmux_untrimmed(server, &["list-panes", "-a", "-F", &pane_format()]) {
-        Ok(output) => Ok(agent_panes_in(&output)),
-        Err(PmError::Tmux(msg)) if no_server(&msg) => Ok(Vec::new()),
-        Err(e) => Err(e),
-    }
-}
-
-/// Each window's marked pane in `output`, else its first, in window order.
-fn agent_panes_in(output: &str) -> Vec<Pane> {
-    let mut panes: Vec<Pane> = Vec::new();
-    for line in output.lines() {
-        let fields: Vec<&str> = line.split('\t').collect();
-        let [session, window_name, window, id, pid, marked] = fields[..] else {
-            continue;
-        };
-        let Ok(pid) = pid.parse() else { continue };
-        let pane = Pane {
-            session: session.to_string(),
-            window_name: window_name.to_string(),
-            window: window.to_string(),
-            id: id.to_string(),
-            pid,
-        };
-        match panes.iter().position(|p| p.window == window) {
-            None => panes.push(pane),
-            Some(at) if !marked.is_empty() => panes[at] = pane,
-            Some(_) => {}
-        }
-    }
-    panes
-}
-
 /// Whether a tmux error says there is no server to talk to: none was
 /// running (the message varies by platform), or it exited mid-command.
 fn no_server(msg: &str) -> bool {
@@ -598,38 +410,6 @@ fn no_server(msg: &str) -> bool {
     ]
     .iter()
     .any(|m| msg.contains(m))
-}
-
-/// The process name (e.g. "claude", "zsh") in the foreground of a
-/// window's agent pane.
-pub fn pane_command(server: Option<&str>, window: &str) -> Result<String> {
-    let pane = agent_pane_target(server, window)?;
-    run_tmux(
-        server,
-        &[
-            "display-message",
-            "-p",
-            "-t",
-            &exact(&pane),
-            "#{pane_current_command}",
-        ],
-    )
-}
-
-/// Full scrollback of a window's agent pane as plain text, wrapped lines
-/// joined.
-pub fn capture_pane(server: Option<&str>, window: &str) -> Result<String> {
-    let pane = agent_pane_target(server, window)?;
-    run_tmux(
-        server,
-        &["capture-pane", "-p", "-J", "-S", "-", "-t", &exact(&pane)],
-    )
-}
-
-/// What `pane` shows now, as plain text, row for row: a wrapped line stays
-/// on the rows it was drawn on, so no row is wider than the pane.
-pub fn capture_visible(server: Option<&str>, pane: &str) -> Result<String> {
-    run_tmux_untrimmed(server, &["capture-pane", "-p", "-t", &exact(pane)])
 }
 
 /// Select (focus) a specific window in a session.
@@ -672,93 +452,6 @@ mod tests {
     use super::*;
     use crate::testing::TestServer;
     use tempfile::tempdir;
-
-    #[test]
-    fn a_window_is_read_by_its_marked_pane_else_its_first() {
-        let output = "s\tw\ts:1\t%1\t11\t\n\
-                      s\tw\ts:1\t%2\t12\t1\n\
-                      s\tw\ts:1\t%3\t13\t\n\
-                      s\tx\ts:2\t%4\t14\t\n\
-                      s\tx\ts:2\t%5\t15\t\n";
-        let panes = agent_panes_in(output);
-        let read: Vec<(&str, &str)> = panes
-            .iter()
-            .map(|p| (p.window.as_str(), p.id.as_str()))
-            .collect();
-        assert_eq!(read, [("s:1", "%2"), ("s:2", "%4")]);
-    }
-
-    #[test]
-    fn panes_are_listed_when_the_caller_has_no_utf8_locale() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let session = server.scope("no-locale");
-        create_session(server.name(), &session, dir.path()).unwrap();
-
-        let output = tmux_command(server.name())
-            .env_remove("LANG")
-            .env_remove("LC_ALL")
-            .env_remove("LC_CTYPE")
-            .env_remove("TMUX")
-            .args(["list-panes", "-a", "-F", &pane_format()])
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        let panes = agent_panes_in(&String::from_utf8_lossy(&output.stdout));
-        assert!(panes.iter().any(|p| p.session == session), "{panes:?}");
-    }
-
-    #[test]
-    fn pane_helpers_read_the_agent_pane_whichever_is_active() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let session = server.scope("agent-pane");
-        create_session(server.name(), &session, dir.path()).unwrap();
-        let window = format!("{session}:0");
-        mark_agent_pane(server.name(), &window).unwrap();
-        send_line(server.name(), &window, "exec sleep 999").unwrap();
-        server.split_before(&window);
-        send_text(server.name(), &window, "echo in-the-users-pane").unwrap();
-
-        server.wait_for_pane_text(&window, "exec sleep 999");
-        let start = std::time::Instant::now();
-        while pane_command(server.name(), &window).unwrap() != "sleep" {
-            assert!(start.elapsed() < std::time::Duration::from_secs(10));
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert!(
-            !capture_pane(server.name(), &window)
-                .unwrap()
-                .contains("in-the-users-pane")
-        );
-    }
-
-    #[test]
-    fn the_visible_screen_keeps_a_wrapped_line_on_the_rows_it_was_drawn_on() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let session = server.scope("wrapped");
-        create_session(server.name(), &session, dir.path()).unwrap();
-        let window = format!("{session}:0");
-        let width: usize = server
-            .tmux_stdout(&["display-message", "-p", "-t", &window, "#{pane_width}"])
-            .parse()
-            .unwrap();
-        send_line(
-            server.name(),
-            &window,
-            &format!("printf '%0{}d\\n' 0", width + 10),
-        )
-        .unwrap();
-        server.wait_for_pane_text(&window, "0000000000");
-
-        let screen = capture_visible(server.name(), &window).unwrap();
-        assert!(
-            screen.lines().all(|l| l.chars().count() <= width),
-            "{screen}"
-        );
-        assert!(screen.lines().any(|l| l == "0".repeat(width)), "{screen}");
-    }
 
     #[test]
     fn create_session_is_visible_in_list() {
@@ -983,21 +676,6 @@ mod tests {
         assert_eq!(list_windows(server.name(), &name).unwrap(), 2);
         kill_window(server.name(), &target).unwrap();
         assert_eq!(list_windows(server.name(), &name).unwrap(), 1);
-    }
-
-    #[test]
-    fn pane_command_returns_shell() {
-        let server = TestServer::new();
-        let dir = tempdir().unwrap();
-        let name = server.scope("pane-cmd");
-
-        create_session(server.name(), &name, dir.path()).unwrap();
-        let target = format!("{name}:0");
-
-        let cmd = pane_command(server.name(), &target).unwrap();
-        // Default pane runs a shell (bash, zsh, etc.)
-        assert!(!cmd.is_empty());
-        assert_ne!(cmd, "claude");
     }
 
     #[test]

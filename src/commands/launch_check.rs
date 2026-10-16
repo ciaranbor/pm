@@ -19,7 +19,7 @@
 //! line, which under load can take seconds. A harness rejecting its flags
 //! can exit in tens of milliseconds, too fast to be seen, so a launch also
 //! fails once its shell has run the typed line (the line creates the
-//! agent's launch stamp, [`runtime::launched_at`]) and then sat waiting for
+//! agent's launched stamp, [`runtime::launched_at`]) and then sat waiting for
 //! input, asleep at its prompt, for a moment without the harness seen. A
 //! shell asleep in a startup file (`read -t`, `wait`) before it ran the line
 //! is still starting.
@@ -469,7 +469,7 @@ mod tests {
         let main = tmux::session_name(&project_name, "main");
         server.spawn_fake_agent(&project, &login, "login", "up");
         runtime::mark_started(&project, "login", "up").unwrap();
-        // What a spawn types: the launch stamp, then the harness.
+        // What a spawn types: the launched stamp, then the harness.
         let type_launch = |scope: &str, agent: &str, window: &str, line: String| {
             runtime::reset_started(&project, scope, agent).unwrap();
             let stamp = runtime::reset_launched(&project, scope, agent).unwrap();

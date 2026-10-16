@@ -4,7 +4,7 @@
 //! ([`agent_restart_many`](super::agent_restart::agent_restart_many)).
 //!
 //! Which agents to restart is decided from one scan of the server
-//! ([`scope_agents_in`]); each scope's restart reads its agents again, so
+//! ([`plan()`]); each scope's restart reads its agents again, so
 //! one that turned mid-turn since is still refused. Idle, unarmed and dead
 //! agents restart — a dead one is healed by the respawn. An agent mid-turn,
 //! asking, or running background work is skipped unless `force`, which
@@ -20,23 +20,14 @@
 //! Each harness's agents restart behind a canary ([`canary`]).
 //!
 //! [`Select::Stale`] (`--stale`, and `pm update`) narrows the sweep to
-//! running agents whose launch is stale ([`launch_stamp`]): a dead agent,
-//! or one of a closed session, launches with what is current at its next
-//! spawn anyway. The caller, which asked for no restart of its own, and an
-//! agent mid-turn are deferred: each restarts at its next idle
-//! ([`restart_at_idle`](super::restart_at_idle)), unless `[upgrade]
-//! restart_agents = false`, which leaves them reported as skipped. A
-//! stale agent whose configured harness changed, which a restart would
-//! start over on a new conversation, and one that would not relaunch
-//! (`StaleCheck::unlaunchable`) are left running, each reported with the
-//! command that restarts it.
+//! running agents whose launch is stale ([`stale`]).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
 use crate::harness::Harness;
-use crate::state::agent::{AgentEntry, AgentRegistry};
+use crate::state::agent::AgentRegistry;
 use crate::state::paths;
 use crate::state::project::{GlobalConfig, ProjectConfig, ProjectEntry};
 use crate::state::runtime;
@@ -44,14 +35,16 @@ use crate::state::scope;
 use crate::tmux;
 
 use super::agent_restart::{Restarted, callers_agent};
-use super::attention::{AgentState, scope_agents_in};
 use super::launch_check::{self, FailedLaunch, Launch};
-use super::launch_stamp;
 
 pub mod canary;
-use super::running_agents::Windows;
-use super::{agent_spawn, harness_check};
+pub mod plan;
+pub mod stale;
+use super::agent_spawn;
 use canary::Confirm;
+pub use plan::{Plan, Select, plan};
+use plan::{held_back, restart_command};
+pub(super) use stale::{StaleCheck, Verdict};
 
 /// A scope of a project.
 #[derive(Debug, Clone)]
@@ -309,226 +302,6 @@ impl RestartAll {
     }
 }
 
-/// Which agents a sweep restarts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Select {
-    /// Every active agent.
-    All,
-    /// The stale ones ([`launch_stamp`]) that are running; the caller and
-    /// those mid-turn are deferred (module docs).
-    Stale,
-}
-
-impl Select {
-    /// How to restart an agent skipped as mid-turn.
-    fn hint(self, scope: &Scope, agent: &str) -> String {
-        match self {
-            Select::All => "--force interrupts it and has it resume".to_string(),
-            Select::Stale => format!(
-                "restart it once idle with {}",
-                restart_command(scope, agent)
-            ),
-        }
-    }
-}
-
-/// What a sweep would do, read from one scan of the server.
-#[derive(Debug, Default)]
-pub struct Plan {
-    /// The agents and scopes settled without a restart.
-    pub unrestarted: Vec<Report>,
-    /// Each scope's agents to restart, and whether the caller is among them.
-    pub planned: Vec<(Scope, Vec<String>, bool)>,
-    /// The agents to restart at their next idle, each with why not now.
-    pub deferred: Vec<(Scope, String, String)>,
-    /// How many [`Select::Stale`] passed over as up to date.
-    pub up_to_date: usize,
-    /// How many running agents [`Select::Stale`] found stale.
-    pub stale: usize,
-}
-
-impl Plan {
-    /// Take each planned agent `why` gives a reason for out of the plan,
-    /// reporting it skipped for that reason with the command that restarts
-    /// it.
-    pub fn hold(&mut self, why: impl Fn(&Scope, &str) -> Option<String>) {
-        for (scope, names, _) in &mut self.planned {
-            names.retain(|name| match why(scope, name) {
-                Some(why) => {
-                    self.unrestarted.push(held_back(scope, name, &why));
-                    false
-                }
-                None => true,
-            });
-        }
-        self.planned.retain(|(_, names, _)| !names.is_empty());
-    }
-
-    /// One `Would restart` line per planned or deferred agent.
-    pub fn would_restart(&self) -> Vec<String> {
-        let now = self.planned.iter().flat_map(|(scope, names, _)| {
-            names
-                .iter()
-                .map(move |name| format!("{}: Would restart agent '{name}'", scope.label()))
-        });
-        let deferred = self.deferred.iter().map(|(scope, name, why)| {
-            format!(
-                "{}: Would restart agent '{name}' at its next idle ({why})",
-                scope.label()
-            )
-        });
-        now.chain(deferred).collect()
-    }
-}
-
-/// Plan a sweep of `scopes` (module docs).
-pub fn plan(
-    scopes: &[Scope],
-    select: Select,
-    force: bool,
-    tmux_server: Option<&str>,
-) -> Result<Plan> {
-    let windows = Windows::read(tmux_server)?;
-    let global = (select == Select::Stale).then(GlobalConfig::load_or_default);
-    let defer = global.as_ref().is_some_and(|g| g.upgrade.restarts_agents());
-    let mut plan = Plan::default();
-    for scope in scopes {
-        let report = |outcome: Outcome| Report {
-            target: scope.label(),
-            outcome,
-        };
-        let failed =
-            |e: PmError| report(Outcome::Failed(format!("Failed to read its agents: {e}")));
-        let agents = match scope_agents_in(&scope.root, &scope.name, &windows) {
-            Ok(agents) => agents,
-            Err(e) => {
-                plan.unrestarted.push(failed(e));
-                continue;
-            }
-        };
-        let stale = match &global {
-            None => None,
-            Some(global) => match StaleCheck::read(scope, global) {
-                Ok(check) => Some(check),
-                Err(e) => {
-                    plan.unrestarted.push(failed(e));
-                    continue;
-                }
-            },
-        };
-        let active: Vec<String> = agents
-            .iter()
-            .filter(|a| a.state != AgentState::Stopped)
-            .map(|a| a.name.clone())
-            .collect();
-        let caller = callers_agent(&scope.root, &scope.name, &active, tmux_server);
-        let mut names = Vec::new();
-        for agent in agents {
-            let skip = |why: &str| {
-                report(Outcome::Skipped(format!(
-                    "Skipped agent '{}': {why}",
-                    agent.name
-                )))
-            };
-            let is_caller = Some(&agent.name) == caller;
-            if let Some(check) = &stale {
-                let verdict = check.verdict(scope, &agent.name, agent.state, is_caller);
-                if matches!(verdict, Verdict::Stale | Verdict::Held(_) | Verdict::Caller) {
-                    plan.stale += 1;
-                }
-                match verdict {
-                    Verdict::Unrun => continue,
-                    Verdict::UpToDate => {
-                        plan.up_to_date += 1;
-                        continue;
-                    }
-                    Verdict::Held(why) => {
-                        plan.unrestarted.push(skip(&why));
-                        continue;
-                    }
-                    Verdict::Caller if defer => {
-                        plan.deferred.push((
-                            scope.clone(),
-                            agent.name,
-                            "it runs this command".to_string(),
-                        ));
-                        continue;
-                    }
-                    Verdict::Caller => {
-                        plan.unrestarted.push(skip(&format!(
-                            "it is stale, and runs this command; restart it with {}",
-                            restart_command(scope, &agent.name)
-                        )));
-                        continue;
-                    }
-                    Verdict::Unknown(why) => {
-                        plan.unrestarted.push(report(Outcome::Failed(why)));
-                        continue;
-                    }
-                    Verdict::Stale => {}
-                }
-            }
-            match agent.state {
-                AgentState::Stopped => {}
-                AgentState::Closed => plan.unrestarted.push(skip("its session is closed")),
-                _ if is_caller => names.push(agent.name),
-                AgentState::Busy | AgentState::Asking | AgentState::Background
-                    if !force && defer =>
-                {
-                    let why = mid_turn(agent.state).to_string();
-                    plan.deferred.push((scope.clone(), agent.name, why));
-                }
-                AgentState::Busy | AgentState::Asking | AgentState::Background if !force => {
-                    let hint = select.hint(scope, &agent.name);
-                    plan.unrestarted
-                        .push(skip(&format!("{}; {hint}", mid_turn(agent.state))));
-                }
-                _ => names.push(agent.name),
-            }
-        }
-        if let Some(check) = &stale
-            && !names.is_empty()
-        {
-            match check.unlaunchable(scope, &names) {
-                Ok(unlaunchable) => {
-                    for (agent, why) in unlaunchable {
-                        names.retain(|n| *n != agent);
-                        plan.unrestarted.push(report(Outcome::Skipped(format!(
-                            "Skipped agent '{agent}': it is stale, but would not relaunch \
-                             ({why}); fix that, then {}",
-                            restart_command(scope, &agent)
-                        ))));
-                    }
-                }
-                Err(e) => {
-                    for agent in names.drain(..) {
-                        plan.unrestarted.push(report(Outcome::Failed(format!(
-                            "Failed to tell whether agent '{agent}' would relaunch: {e}"
-                        ))));
-                    }
-                }
-            }
-        }
-        if !names.is_empty() {
-            let has_caller = caller.is_some_and(|c| names.contains(c));
-            plan.planned.push((scope.clone(), names, has_caller));
-        }
-    }
-    plan.planned.sort_by_key(|(.., caller)| *caller);
-    Ok(plan)
-}
-
-/// `agent` of `scope` skipped, held back for `why` until it clears.
-fn held_back(scope: &Scope, agent: &str, why: &str) -> Report {
-    Report {
-        target: scope.label(),
-        outcome: Outcome::Skipped(format!(
-            "Skipped agent '{agent}': {why}; restart it once that clears with {}",
-            restart_command(scope, agent)
-        )),
-    }
-}
-
 /// The harness each of `names` but the caller launches on its restart;
 /// one that cannot be told is left out, so it is no canary and none holds
 /// it back.
@@ -561,139 +334,6 @@ pub(super) fn harnesses_of(
         .collect()
 }
 
-/// The command that restarts `agent` of `scope`, quoted for a report line.
-fn restart_command(scope: &Scope, agent: &str) -> String {
-    format!("`pm agent restart {agent} --scope {}`", scope.name)
-}
-
-/// What [`Select::Stale`] makes of one agent.
-pub(super) enum Verdict {
-    /// Not running: its next spawn launches with what is current.
-    Unrun,
-    UpToDate,
-    /// Stale, but left for the user to restart, for the reason given.
-    Held(String),
-    /// Whether it is stale could not be told, for the reason given.
-    Unknown(String),
-    /// Stale, and runs this command.
-    Caller,
-    Stale,
-}
-
-/// What [`Select::Stale`] reads once per scope.
-pub(super) struct StaleCheck {
-    registry: AgentRegistry,
-    config: ProjectConfig,
-    global: GlobalConfig,
-}
-
-impl StaleCheck {
-    pub(super) fn read(scope: &Scope, global: &GlobalConfig) -> Result<Self> {
-        Ok(Self {
-            registry: AgentRegistry::load(&paths::agents_dir(&scope.root), &scope.name)?,
-            config: ProjectConfig::load(&paths::pm_dir(&scope.root))?,
-            global: global.clone(),
-        })
-    }
-
-    /// The harness `agent` runs on.
-    pub(super) fn harness(&self, agent: &str) -> Result<Harness> {
-        Ok(self.entry(agent)?.harness)
-    }
-
-    fn entry(&self, agent: &str) -> Result<&AgentEntry> {
-        self.registry
-            .get(agent)
-            .ok_or_else(|| PmError::Agent(format!("agent '{agent}' is not registered")))
-    }
-
-    /// The caller asked for no restart of its own, and a restart onto
-    /// another harness would start its conversation over.
-    pub(super) fn verdict(
-        &self,
-        scope: &Scope,
-        agent: &str,
-        state: AgentState,
-        is_caller: bool,
-    ) -> Verdict {
-        let unrun = match state {
-            AgentState::Stopped | AgentState::Closed => true,
-            AgentState::Dead => !is_caller,
-            _ => false,
-        };
-        if unrun {
-            return Verdict::Unrun;
-        }
-        let unknown = |e: PmError| {
-            Verdict::Unknown(format!(
-                "Failed to tell whether agent '{agent}' is stale: {e}"
-            ))
-        };
-        let entry = match self.entry(agent) {
-            Ok(entry) => entry,
-            Err(e) => return unknown(e),
-        };
-        let (root, name) = (&scope.root, &scope.name);
-        match launch_stamp::is_stale(root, name, agent, entry, &self.config, &self.global) {
-            Ok(true) => {}
-            Ok(false) => return Verdict::UpToDate,
-            Err(e) => return unknown(e),
-        }
-        let restart = restart_command(scope, agent);
-        let configured = agent_spawn::configured_harness(
-            entry.effective_definition(agent),
-            &self.config.agents,
-            &self.global.agents,
-        );
-        match configured {
-            Ok(harness) if harness != entry.harness => Verdict::Held(format!(
-                "it is configured for {harness} now, so a restart starts a fresh conversation \
-                 instead of resuming its {} one; {restart} does that",
-                entry.harness
-            )),
-            Ok(_) if is_caller => Verdict::Caller,
-            Ok(_) => Verdict::Stale,
-            Err(e) => unknown(e),
-        }
-    }
-
-    /// Each of `agents` that would not relaunch, with why: what
-    /// [`harness_check::launch_problems`] or the spawn's own definition check
-    /// refuses.
-    pub(super) fn unlaunchable(
-        &self,
-        scope: &Scope,
-        agents: &[String],
-    ) -> Result<Vec<(String, String)>> {
-        let mut definitions = Vec::new();
-        for agent in agents {
-            definitions.push(self.entry(agent)?.effective_definition(agent).to_string());
-        }
-        let mut unique = definitions.clone();
-        unique.sort();
-        unique.dedup();
-        let mut problems =
-            harness_check::launch_problems(&scope.root, &self.config, &self.global, &unique)?;
-        for definition in &unique {
-            if let Err(e) = agent_spawn::validate_definition_resolves(&scope.root, definition) {
-                problems.push((definition.clone(), e.to_string()));
-            }
-        }
-        Ok(agents
-            .iter()
-            .zip(&definitions)
-            .filter_map(|(agent, definition)| {
-                let lines: Vec<&str> = problems
-                    .iter()
-                    .filter(|(d, _)| d == definition)
-                    .map(|(_, line)| line.as_str())
-                    .collect();
-                (!lines.is_empty()).then(|| (agent.clone(), lines.join("; ")))
-            })
-            .collect())
-    }
-}
-
 /// Restart the agents of `scopes` that `select` picks (module docs).
 pub fn restart_all(
     scopes: &[Scope],
@@ -705,7 +345,7 @@ pub fn restart_all(
     Ok(restart_plan(plan, select, force, tmux_server))
 }
 
-/// Restart what `plan`, made by [`plan`] with `select` and `force`, holds.
+/// Restart what `plan`, made by [`plan()`] with `select` and `force`, holds.
 pub fn restart_plan(
     plan: Plan,
     select: Select,
@@ -747,15 +387,6 @@ fn restart_confirming(
         batches,
         select,
         up_to_date: plan.up_to_date,
-    }
-}
-
-/// Why restarting an agent in `state` would cut its turn short.
-fn mid_turn(state: AgentState) -> &'static str {
-    match state {
-        AgentState::Asking => "a dialog waits on the user",
-        AgentState::Background => "it is waiting on background work",
-        _ => "it is mid-turn",
     }
 }
 
