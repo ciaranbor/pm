@@ -26,6 +26,7 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::BranchMissing
         | IssueKind::StuckInitializing
         | IssueKind::WorkflowDirMissing
+        | IssueKind::WorkflowConfigInvalid
         | IssueKind::PrMerged
         | IssueKind::PrClosed
         | IssueKind::PrCheckFailed

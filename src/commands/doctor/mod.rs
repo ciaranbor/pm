@@ -50,6 +50,8 @@ pub enum IssueKind {
     StuckInitializing,
     /// Feature references a workflow whose directory is missing.
     WorkflowDirMissing,
+    /// An installed workflow's `config.toml` fails to load.
+    WorkflowConfigInvalid,
     /// PR merged upstream but local status hasn't caught up.
     PrMerged,
     /// PR closed upstream but local status still active.

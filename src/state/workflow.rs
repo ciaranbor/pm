@@ -77,13 +77,17 @@ impl WorkflowDef {
     fn load_from_dir(dir: &Path) -> Result<Self> {
         let path = dir.join("config.toml");
         let content = std::fs::read_to_string(&path)?;
-        let table: toml::Table = toml::from_str(&content)?;
+        let malformed = |e: toml::de::Error| PmError::WorkflowConfigMalformed {
+            path: path.clone(),
+            reason: one_line(&e, &content),
+        };
+        let table: toml::Table = toml::from_str(&content).map_err(malformed)?;
         // Serde would silently drop `auto_spawn`, leaving a workflow that only
         // sets it with no team.
         if table.contains_key("auto_spawn") {
             return Err(PmError::WorkflowAutoSpawn { path });
         }
-        Ok(table.try_into()?)
+        table.try_into().map_err(malformed)
     }
 
     /// Validate the workflow's spawn set:
@@ -158,6 +162,21 @@ impl std::fmt::Display for Tier {
             Tier::Global => "global",
         })
     }
+}
+
+/// `e` on one line: its message, and where in `content` it is when known.
+fn one_line(e: &toml::de::Error, content: &str) -> String {
+    let message = e.message().trim_end();
+    let Some(span) = e.span() else {
+        return message.to_string();
+    };
+    let before = &content[..span.start.min(content.len())];
+    let line = before.matches('\n').count() + 1;
+    let column = before[before.rfind('\n').map_or(0, |i| i + 1)..]
+        .chars()
+        .count()
+        + 1;
+    format!("{message} (line {line}, column {column})")
 }
 
 /// The global workflow tier for this process.
