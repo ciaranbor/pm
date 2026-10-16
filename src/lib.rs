@@ -17,5 +17,6 @@ pub mod state;
 pub mod tailscale;
 #[cfg(test)]
 pub mod testing;
+pub mod text;
 pub mod tmux;
 pub mod version;

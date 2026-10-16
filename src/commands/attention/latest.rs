@@ -41,7 +41,7 @@ pub(super) fn latest(
         .ok()?
         .and_then(|item| match item.body {
             Body::Assistant { text } => Some(Latest {
-                text: cut(&plain_line(&text), MAX),
+                text: crate::text::ellipsize(&plain_line(&text), MAX),
                 at: item.at,
             }),
             _ => None,
@@ -83,24 +83,6 @@ fn plain_line(text: &str) -> String {
         .flat_map(str::split_whitespace)
         .collect();
     words.join(" ").replace("**", "").replace('`', "")
-}
-
-/// `text` cut to `max` characters, at a word's end where one is near, and
-/// marked with an ellipsis when cut.
-pub fn cut(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
-    }
-    let (end, _) = text
-        .char_indices()
-        .nth(max.saturating_sub(1))
-        .expect("longer than max");
-    let head = &text[..end];
-    let head = match head.rfind(' ') {
-        Some(space) if space * 4 >= end * 3 => &head[..space],
-        _ => head,
-    };
-    format!("{}…", head.trim_end())
 }
 
 #[cfg(test)]
@@ -193,13 +175,5 @@ mod tests {
             plain_line("#{session} #42 opens\n1. #7 first\n2024 was a year"),
             "#{session} #42 opens #7 first 2024 was a year"
         );
-    }
-
-    #[test]
-    fn a_cut_ends_at_a_word_and_says_so() {
-        assert_eq!(cut("short", 10), "short");
-        assert_eq!(cut("the quick brown fox", 12), "the quick…");
-        assert_eq!(cut("abcdefghijklmnop", 6), "abcde…");
-        assert_eq!(cut("ééééééé", 4), "ééé…");
     }
 }

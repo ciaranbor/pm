@@ -29,7 +29,7 @@ pub fn wake(messages_dir: &Path, scope: &str, agent: &str) -> Result<String> {
     };
     let cursor = cursor_for(messages_dir, scope, agent, &choice.sender)?;
     let first = read_at(messages_dir, scope, agent, &choice.sender, cursor + 1)?
-        .map(|m| crate::harness::one_line(&m.body))
+        .map(|m| crate::text::one_line(&m.body))
         .unwrap_or_default();
     Ok(wake_text(Some((&choice.sender, &first)), &choice.pending))
 }

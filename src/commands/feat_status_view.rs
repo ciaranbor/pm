@@ -218,7 +218,10 @@ fn latest_lines<'a>(
 
 fn latest_line(indent: &str, agent: &str, latest: &Latest) -> String {
     let width = attention::LATEST_WIDTH.saturating_sub(agent.chars().count() + 2);
-    format!("{indent}{agent}: {}", attention::cut(&latest.text, width))
+    format!(
+        "{indent}{agent}: {}",
+        crate::text::ellipsize(&latest.text, width)
+    )
 }
 
 /// `agent:state` for each agent, `+N` for its unread messages; `no session`

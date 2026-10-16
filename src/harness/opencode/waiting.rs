@@ -17,8 +17,9 @@
 
 use serde_json::Value;
 
-use crate::harness::{WaitingEvent, one_line};
+use crate::harness::WaitingEvent;
 use crate::state::runtime::{Waiting, WaitingKind};
+use crate::text::one_line;
 
 pub(in crate::harness) fn event(payload: &Value) -> Option<WaitingEvent> {
     let detail = payload.get("detail").and_then(Value::as_str).map(one_line);

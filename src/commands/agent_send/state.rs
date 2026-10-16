@@ -28,7 +28,7 @@ pub(super) fn describe(agent: &str, found: &AgentSnapshot) -> String {
         found
             .waiting
             .as_ref()
-            .map(|w| format!(" ({})", crate::harness::one_line(&w.detail)))
+            .map(|w| format!(" ({})", crate::text::one_line(&w.detail)))
             .unwrap_or_default()
     };
     match found.state {

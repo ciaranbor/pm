@@ -15,10 +15,10 @@
 
 use serde_json::Value;
 
-use crate::harness::one_line;
 use crate::harness::transcript::items::{
     Body, Item, ToolResult, content_text, summarize_input, timestamp,
 };
+use crate::text::one_line;
 
 /// A `session_message` row.
 #[derive(Debug)]

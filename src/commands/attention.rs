@@ -42,7 +42,7 @@ use super::running_agents::{AgentAt, Liveness, Windows, classify, starting};
 mod latest;
 pub mod transition;
 
-pub use latest::{WIDTH as LATEST_WIDTH, cut};
+pub use latest::WIDTH as LATEST_WIDTH;
 
 /// Bumped when a field changes meaning or goes away; added fields, kinds
 /// and states keep it.

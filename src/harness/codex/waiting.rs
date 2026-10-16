@@ -18,8 +18,9 @@
 
 use serde_json::Value;
 
-use crate::harness::{WaitingEvent, one_line};
+use crate::harness::WaitingEvent;
 use crate::state::runtime::{Waiting, WaitingKind};
+use crate::text::one_line;
 
 pub(in crate::harness) const EVENTS: &[&str] = &[
     "PermissionRequest",
