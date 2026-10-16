@@ -41,6 +41,9 @@ pub enum IssueKind {
     /// An active agent's window is up but its harness session has not
     /// reported starting since its launch.
     AgentSessionNotStarted,
+    /// An active agent's session started but reported no inbound channel,
+    /// so pm cannot wake it once it is unarmed.
+    NoWakeChannel,
     /// An active agent's window is up but its harness exited to the shell.
     AgentHarnessExited,
     /// Feature status stuck on `initializing`.
