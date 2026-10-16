@@ -69,9 +69,8 @@ pub fn rearm(
     let Some(inbound) = runtime::read_inbound(project_root, scope, agent) else {
         return Err(PmError::Agent(format!(
             "its session reported no wake channel, so nothing wakes it to read this until it \
-             is prompted or restarted (`pm agent restart {agent} --scope {scope} --project {}` \
-             starts a session that may report one)",
-            project.project.name
+             is prompted or restarted ({} starts a session that may report one)",
+            super::agent_restart::restart_command(&project.project.name, scope, agent)
         )));
     };
     let marker = runtime::read_waiting(project_root, scope, agent)

@@ -244,7 +244,7 @@ mod tests {
                     "{session}: Skipped agent 'reviewer': it is stale, but the macOS login \
                      keychain did not answer `{}` within 5s, and claude-code reads it as it \
                      starts; restart it once that clears with \
-                     `pm agent restart reviewer --scope login`",
+                     `pm agent restart reviewer --scope login --project {project_name}`",
                     keychain::COMMAND
                 ),
                 "Stale agents: Restarted 0, skipped 1, failed 0".to_string(),

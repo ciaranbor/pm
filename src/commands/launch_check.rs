@@ -92,8 +92,13 @@ impl FailedLaunch {
     }
 
     pub fn message(&self) -> String {
-        let Launch { agent, scope, .. } = &self.launch;
-        let restart = format!("`pm agent restart {agent} --scope {scope}`");
+        let Launch {
+            project_root,
+            scope,
+            agent,
+        } = &self.launch;
+        let restart =
+            super::agent_restart::restart_command(&paths::project_name(project_root), scope, agent);
         let mut message = match self.failure {
             Failure::Exited => format!(
                 "agent '{agent}': its harness exited at launch (fix the cause, then {restart})"
@@ -571,10 +576,10 @@ mod tests {
         let silent = failed[2].message();
         assert!(
             silent.contains("has not come up after 4s: it has drawn nothing")
-                && silent.ends_with(
+                && silent.ends_with(&format!(
                     "it is left running and may come up by itself (if not, \
-                     `pm agent restart silent --scope main`)"
-                ),
+                     `pm agent restart silent --scope main --project {project_name}`)"
+                )),
             "{silent}"
         );
         assert!(

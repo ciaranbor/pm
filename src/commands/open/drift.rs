@@ -220,7 +220,9 @@ mod tests {
         let warnings = collect_drift_warnings(&project_path, &projects_dir, server.name()).unwrap();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
-            warnings[0].ends_with("(run `pm agent restart reviewer --scope login`)"),
+            warnings[0].ends_with(&format!(
+                "(run `pm agent restart reviewer --scope login --project {project_name}`)"
+            )),
             "{warnings:?}"
         );
     }

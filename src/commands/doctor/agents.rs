@@ -6,6 +6,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use super::{Fix, FixAction, Issue, IssueKind};
+use crate::commands::agent_restart::restart_command;
 use crate::commands::attention::{self, AgentState};
 use crate::commands::running_agents::Windows;
 use crate::commands::{launch_stamp, vanilla_rename};
@@ -52,6 +53,7 @@ pub(super) fn agent_issues(
         if entry.agent_type != AgentType::Agent || !entry.active {
             continue;
         }
+        let restart = restart_command(project_name, scope, agent_name);
         if windows.find(session_name, &entry.window_name).is_none() {
             issues.push(Issue {
                 kind: IssueKind::AgentWindowMissing,
@@ -70,8 +72,7 @@ pub(super) fn agent_issues(
                 kind: IssueKind::AgentHarnessExited,
                 message: format!(
                     "agent '{agent_name}' has its window open but its {} harness exited \
-                     (its window shows why; fix that, then `pm agent restart {agent_name} \
-                     --scope {scope}`)",
+                     (its window shows why; fix that, then {restart})",
                     entry.harness
                 ),
                 fix: Fix::None,
@@ -94,7 +95,7 @@ pub(super) fn agent_issues(
                 message: format!(
                     "agent '{agent_name}' runs on what it was launched with, which has changed \
                      since (its definition, the baseline, a notice board, a config row, or pm's \
-                     hooks); `pm agent restart {agent_name} --scope {scope}` relaunches it"
+                     hooks); {restart} relaunches it"
                 ),
                 fix: Fix::None,
             });
@@ -107,7 +108,7 @@ pub(super) fn agent_issues(
                     message: format!(
                         "agent '{agent_name}' is running but {} has not loaded pm's never-idle \
                          plugin, so it never wakes for messages (`/plugins` in its window shows \
-                         why; then `pm agent restart {agent_name} --scope {scope}`)",
+                         why; then {restart})",
                         entry.harness
                     ),
                     fix: Fix::None,
@@ -117,7 +118,7 @@ pub(super) fn agent_issues(
                     kind: IssueKind::AgentSessionNotStarted,
                     message: format!(
                         "agent '{agent_name}' is running but its {} session never reported \
-                         starting (run `pm agent restart {agent_name} --scope {scope}`)",
+                         starting (run {restart})",
                         entry.harness
                     ),
                     fix: Fix::None,
@@ -130,9 +131,8 @@ pub(super) fn agent_issues(
                     message: format!(
                         "agent '{agent_name}' is running but its {} session reported no wake \
                          channel, so once it stops listening nothing wakes it for messages \
-                         until it is prompted or restarted (`pm agent restart {agent_name} \
-                         --scope {scope} --project {project_name}` starts a session that may \
-                         report one)",
+                         until it is prompted or restarted ({restart} starts a session that \
+                         may report one)",
                         entry.harness
                     ),
                     fix: Fix::None,
@@ -154,8 +154,7 @@ fn session_started(project_root: &Path, scope: &str, agent: &str) -> bool {
 /// Whether `agent`'s never-idle loop stopped itself, or its last turn
 /// failed while the loop still retries. Not fixable here: a restart re-arms
 /// the loop, but whatever stopped it (a model that fails every turn, an
-/// inbox the agent cannot read) would stop it again. The restart command
-/// names the project, so it runs from anywhere.
+/// inbox the agent cannot read) would stop it again.
 fn loop_issue(
     project_root: &Path,
     project_name: &str,
@@ -170,8 +169,8 @@ fn loop_issue(
             kind: IssueKind::LoopStopped,
             message: format!(
                 "agent '{name}' no longer wakes for messages — its never-idle loop \
-                 stopped: {reason}. Fix the cause, then `pm agent restart {name} --scope \
-                 {scope} --project {project_name}`"
+                 stopped: {reason}. Fix the cause, then {}",
+                restart_command(project_name, scope, name)
             ),
             fix: Fix::None,
         });
@@ -520,7 +519,9 @@ mod tests {
             .collect();
         assert_eq!(stale.len(), 1, "{stale:?}");
         assert!(
-            stale[0].contains("`pm agent restart reviewer --scope login`"),
+            stale[0].contains(&format!(
+                "`pm agent restart reviewer --scope login --project {project_name}`"
+            )),
             "{stale:?}"
         );
     }
@@ -564,10 +565,11 @@ mod tests {
             login_issues(),
             vec![(
                 IssueKind::LoopNotLoaded,
-                "agent 'reviewer' is running but opencode has not loaded pm's never-idle plugin, \
-                 so it never wakes for messages (`/plugins` in its window shows why; then `pm \
-                 agent restart reviewer --scope login`)"
-                    .to_string()
+                format!(
+                    "agent 'reviewer' is running but opencode has not loaded pm's never-idle \
+                     plugin, so it never wakes for messages (`/plugins` in its window shows why; \
+                     then `pm agent restart reviewer --scope login --project {project_name}`)"
+                )
             )]
         );
 
@@ -609,9 +611,11 @@ mod tests {
             issues,
             vec![(
                 IssueKind::AgentHarnessExited,
-                "agent 'reviewer' has its window open but its codex harness exited (its window \
-                 shows why; fix that, then `pm agent restart reviewer --scope login`)"
-                    .to_string()
+                format!(
+                    "agent 'reviewer' has its window open but its codex harness exited (its \
+                     window shows why; fix that, then `pm agent restart reviewer --scope login \
+                     --project {project_name}`)"
+                )
             )]
         );
     }
@@ -650,9 +654,10 @@ mod tests {
         };
         let not_started = vec![(
             IssueKind::AgentSessionNotStarted,
-            "agent 'reviewer' is running but its codex session never reported starting (run \
-             `pm agent restart reviewer --scope login`)"
-                .to_string(),
+            format!(
+                "agent 'reviewer' is running but its codex session never reported starting (run \
+                 `pm agent restart reviewer --scope login --project {project_name}`)"
+            ),
         )];
 
         // Just spawned: the hook may simply not have fired yet. A resume
