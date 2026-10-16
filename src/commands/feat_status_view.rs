@@ -218,10 +218,8 @@ fn latest_lines<'a>(
 
 fn latest_line(indent: &str, agent: &str, latest: &Latest) -> String {
     let width = attention::LATEST_WIDTH.saturating_sub(agent.chars().count() + 2);
-    format!(
-        "{indent}{agent}: {}",
-        crate::text::ellipsize(&latest.text, width)
-    )
+    let text = crate::text::ellipsize(&latest.text, width);
+    format!("{indent}{agent}: {text}").trim_end().to_string()
 }
 
 /// `agent:state` for each agent, `+N` for its unread messages; `no session`
@@ -566,6 +564,11 @@ mod tests {
         assert!(lines[2].trim_start().chars().count() <= attention::LATEST_WIDTH);
         assert_eq!(lines[3], "api    wip");
         assert_eq!(lines.len(), 4);
+
+        // A name that fills the line leaves no room for the text.
+        let long = "a".repeat(attention::LATEST_WIDTH);
+        let latest = said(&long, "Fixed the bug").latest.unwrap();
+        assert_eq!(latest_line("  ", &long, &latest), format!("  {long}:"));
     }
 
     #[test]
