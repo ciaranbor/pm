@@ -25,6 +25,20 @@ impl SessionStore<'_> {
     }
 }
 
+/// `dir` as given and, when it resolves to something else (pm's main
+/// worktree may be a symlink), resolved: the forms a harness that records
+/// the resolved directory may have stored a session started there under.
+pub(super) fn recorded_forms(dir: &Path) -> Vec<String> {
+    let mut forms = vec![dir.to_string_lossy().into_owned()];
+    if let Ok(resolved) = dir.canonicalize() {
+        let resolved = resolved.to_string_lossy().into_owned();
+        if !forms.contains(&resolved) {
+            forms.push(resolved);
+        }
+    }
+    forms
+}
+
 /// One directory whose sessions [`Harness::export_sessions`] writes.
 pub struct ExportJob<'a> {
     /// The `[harness.*]` settings in effect where the sessions belong.

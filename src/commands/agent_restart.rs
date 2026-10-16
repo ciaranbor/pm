@@ -41,11 +41,7 @@ fn restart_one(
 
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
-    registry.get(agent_name).ok_or_else(|| {
-        crate::error::PmError::AgentNotFound(format!(
-            "'{agent_name}' not found in scope '{feature}'"
-        ))
-    })?;
+    registry.require(agent_name, feature)?;
 
     if resume {
         messages::send(

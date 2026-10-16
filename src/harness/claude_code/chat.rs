@@ -167,7 +167,7 @@ fn user(
             }),
         },
         Some("peer") => item(Body::Event {
-            text: crate::harness::one_line(&text),
+            text: crate::text::one_line(&text),
             failure: false,
         }),
         _ if text.trim().is_empty() => Vec::new(),

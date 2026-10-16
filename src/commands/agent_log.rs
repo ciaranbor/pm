@@ -120,10 +120,7 @@ fn body(out: &mut String, text: &str) {
 fn cut(out: &mut String, text: &str) {
     let lines: Vec<&str> = text.trim_end().lines().collect();
     for line in lines.iter().take(CUT) {
-        match line.char_indices().nth(WIDTH) {
-            Some((end, _)) => writeln!(out, "{}…", &line[..end]).unwrap(),
-            None => writeln!(out, "{line}").unwrap(),
-        }
+        writeln!(out, "{}", crate::text::ellipsize(line, WIDTH)).unwrap();
     }
     if lines.len() > CUT {
         writeln!(out, "… {} more lines", lines.len() - CUT).unwrap();
@@ -191,7 +188,7 @@ mod tests {
                 "── user\nFix the login bug\n\n\
                  ── Bash (error) · cargo test\n\
                  line 1{}…\nline 2\nline 3\nline 4\nline 5\n… 3 more lines\n",
-                "x".repeat(194)
+                "x".repeat(193)
             )
         );
         assert!(log(&project, "main", "nobody", 2).is_err());

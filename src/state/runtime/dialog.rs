@@ -119,7 +119,7 @@ impl Dialog {
     pub fn waiting(&self) -> Waiting {
         let detail = match (&self.tool, &self.detail) {
             (Some(tool), Some(detail)) => {
-                Some(format!("{tool}: {}", crate::harness::one_line(detail)))
+                Some(format!("{tool}: {}", crate::text::one_line(detail)))
             }
             (tool, detail) => detail.clone().or_else(|| tool.clone()),
         };

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::error::Result;
+use crate::harness::session_store::recorded_forms;
 use crate::harness::{ImportOutcome, per_session_outcome};
 
 pub(in crate::harness) const MIGRATE_NOTE: &str = "Nothing to migrate: codex finds a session \
@@ -119,17 +120,7 @@ pub(in crate::harness) fn export(
     codex_home: &Path,
     targets: &[(&Path, &Path)],
 ) -> Result<Vec<Option<String>>> {
-    // Codex records the resolved cwd; pm's main worktree may be a symlink.
-    let wanted: Vec<Vec<String>> = targets
-        .iter()
-        .map(|(dir, _)| {
-            let mut forms = vec![dir.to_string_lossy().into_owned()];
-            if let Ok(resolved) = dir.canonicalize() {
-                forms.push(resolved.to_string_lossy().into_owned());
-            }
-            forms
-        })
-        .collect();
+    let wanted: Vec<Vec<String>> = targets.iter().map(|(dir, _)| recorded_forms(dir)).collect();
 
     let store = codex_home.join(SESSIONS_DIR);
     let mut exported = vec![0; targets.len()];

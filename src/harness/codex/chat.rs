@@ -153,7 +153,7 @@ fn script_commands(script: &str) -> Option<String> {
             serde_json::from_str::<String>(&literal[..=end?]).ok()
         })
         .collect();
-    (!commands.is_empty()).then(|| crate::harness::one_line(&commands.join("; ")))
+    (!commands.is_empty()).then(|| crate::text::one_line(&commands.join("; ")))
 }
 
 /// What an `exec` script's result says its `exec_command` calls returned:

@@ -12,10 +12,12 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::UNIX_EPOCH;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bounded;
 use crate::fs_utils::write_atomic;
 use crate::state::paths;
 
@@ -51,15 +53,42 @@ struct Entry {
     exit: Exit,
 }
 
+/// `binary arg`'s exit, running `program arg` within
+/// [`CALL_LIMIT`](super::CALL_LIMIT) unless `probe` allows a cached answer.
+/// `program` is what `binary` names, as it is actually run.
+pub(super) fn run(
+    binary: &str,
+    program: &str,
+    arg: &str,
+    probe: Probe,
+) -> Result<Exit, bounded::Failure> {
+    cached(binary, arg, probe, || {
+        let mut command = Command::new(program);
+        command.arg(arg).stdin(Stdio::null());
+        bounded::run(&mut command, super::CALL_LIMIT).map(Exit::from)
+    })
+}
+
+/// `(major, minor, patch)` from `--version` output whose last word is the
+/// version (`codex-cli 0.156.0`, `opencode v2.0.18`).
+pub(super) fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
+    let token = output.split_whitespace().last()?;
+    let mut nums = token
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<u32>().ok());
+    Some((nums.next()??, nums.next()??, nums.next()??))
+}
+
 /// `binary arg`'s exit, by `spawn` unless `probe` allows a cached one.
-pub(super) fn run<E>(
+fn cached<E>(
     binary: &str,
     arg: &str,
     probe: Probe,
     spawn: impl FnOnce() -> Result<Exit, E>,
 ) -> Result<Exit, E> {
     match paths::global_cache_dir() {
-        Ok(dir) => run_in(&cache_file(&dir), binary, arg, probe, spawn),
+        Ok(dir) => cached_in(&cache_file(&dir), binary, arg, probe, spawn),
         Err(_) => spawn(),
     }
 }
@@ -72,7 +101,7 @@ pub(crate) fn cache_file(cache_dir: &Path) -> PathBuf {
     cache_dir.join(CACHE_FILE)
 }
 
-fn run_in<E>(
+fn cached_in<E>(
     cache: &Path,
     binary: &str,
     arg: &str,
@@ -177,6 +206,16 @@ mod tests {
     use std::cell::Cell;
 
     #[test]
+    fn parse_version_reads_the_last_words_version() {
+        assert_eq!(parse_version("codex-cli 0.156.0"), Some((0, 156, 0)));
+        assert_eq!(parse_version("codex-cli 1.2.0-alpha.3\n"), Some((1, 2, 0)));
+        assert_eq!(parse_version("opencode v2.0.18"), Some((2, 0, 18)));
+        assert_eq!(parse_version("2.0.18"), Some((2, 0, 18)));
+        assert_eq!(parse_version("codex-cli"), None);
+        assert_eq!(parse_version(""), None);
+    }
+
+    #[test]
     fn cached_probe_reuses_an_unchanged_binarys_answer_and_fresh_reprobes() {
         let dir = tempfile::tempdir().unwrap();
         let cache = dir.path().join("cache/harness-probes.json");
@@ -185,7 +224,7 @@ mod tests {
         let binary = binary.to_str().unwrap();
         let spawns = Cell::new(0);
         let probe = |probe, stdout: &str| {
-            run_in(&cache, binary, "--version", probe, || {
+            cached_in(&cache, binary, "--version", probe, || {
                 spawns.set(spawns.get() + 1);
                 Ok::<_, ()>(Exit {
                     success: true,
@@ -212,7 +251,7 @@ mod tests {
         let upgraded = dir.path().join("harness-3");
         std::fs::write(&upgraded, "v3").unwrap();
         std::fs::remove_file(binary).unwrap();
-        run_in(
+        cached_in(
             &cache,
             upgraded.to_str().unwrap(),
             "--version",
@@ -248,7 +287,7 @@ mod tests {
         std::fs::write(&real, "v1").unwrap();
         let spawns = Cell::new(0);
         let probe = || {
-            run_in(
+            cached_in(
                 &cache,
                 wrapper.to_str().unwrap(),
                 "--version",
@@ -280,8 +319,8 @@ mod tests {
         std::fs::write(&binary, "").unwrap();
         let binary = binary.to_str().unwrap();
 
-        assert!(run_in(&cache, binary, "--help", Probe::Cached, || Err(())).is_err());
-        let exit = run_in(&cache, binary, "--help", Probe::Cached, || {
+        assert!(cached_in(&cache, binary, "--help", Probe::Cached, || Err(())).is_err());
+        let exit = cached_in(&cache, binary, "--help", Probe::Cached, || {
             Ok::<_, ()>(Exit {
                 success: true,
                 stdout: "usage".to_string(),

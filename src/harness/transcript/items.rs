@@ -223,7 +223,7 @@ pub fn summarize_input(input: &Value) -> String {
         Value::Null => String::new(),
         other => other.to_string(),
     };
-    crate::harness::one_line(&text)
+    crate::text::one_line(&text)
 }
 
 /// The text of a content value: a string, or an array of blocks whose

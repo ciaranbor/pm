@@ -36,10 +36,10 @@
 use serde_json::{Value, json};
 
 use super::waiting::{plan_title, target};
-use crate::harness::one_line;
 use crate::state::runtime::{
     ANSWER_CHOICE, Answer, Choice, Dialog, DialogRecord, Question, QuestionOption, WaitingKind,
 };
+use crate::text::one_line;
 
 const DECLINE: &str = "decline";
 const ALLOW: &str = "allow";

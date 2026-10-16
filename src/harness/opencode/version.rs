@@ -1,27 +1,15 @@
 //! Which opencode is installed, and whether pm supports it.
 
-use std::process::{Command, Stdio};
-
-use super::api::{CALL, executable};
+use super::api::executable;
 use super::binary;
 use crate::bounded;
-use crate::harness::probe::{self, Probe};
+use crate::harness::probe::{self, Probe, parse_version};
 use crate::state::project::OpenCodeConfig;
 
 /// Earliest release verified against the events and plugin API the loop
 /// relies on and the prompt box [`input`](super::input) reads; an older box reads as
 /// unknown, which refuses remote input.
 const MIN_VERSION: (u32, u32, u32) = (2, 0, 23);
-
-/// `(major, minor, patch)` from `opencode --version` output (`opencode v2.0.18`).
-fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
-    let token = output.split_whitespace().last()?;
-    let mut nums = token
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.parse::<u32>().ok());
-    Some((nums.next()??, nums.next()??, nums.next()??))
-}
 
 /// The installed version's raw string, or why opencode could not be asked.
 /// `--version` starts no server, so it needs no `--standalone`.
@@ -30,16 +18,12 @@ pub(in crate::harness) fn installed_version(
     probe: Probe,
 ) -> std::result::Result<String, String> {
     let unrunnable = || format!("`{}` could not be run", binary(cfg));
-    let exit = probe::run(binary(cfg), "--version", probe, || {
-        let mut command = Command::new(executable(binary(cfg)));
-        command.arg("--version").stdin(Stdio::null());
-        bounded::run(&mut command, CALL)
-            .map(probe::Exit::from)
-            .map_err(|failure| match failure {
-                bounded::Failure::TimedOut { .. } => failure.describe("opencode --version"),
-                bounded::Failure::Unrunnable { .. } => unrunnable(),
-            })
-    })?;
+    let exit = probe::run(binary(cfg), executable(binary(cfg)), "--version", probe).map_err(
+        |failure| match failure {
+            bounded::Failure::TimedOut { .. } => failure.describe("opencode --version"),
+            bounded::Failure::Unrunnable { .. } => unrunnable(),
+        },
+    )?;
     if !exit.success {
         return Err(unrunnable());
     }
@@ -101,15 +85,5 @@ mod tests {
         let current = fake_opencode(dir.path(), "opencode v2.0.23", 0);
         assert_eq!(unusable_reason(&current, Probe::Fresh), None);
         assert_eq!(version_supported(&current, Probe::Fresh), Some(true));
-    }
-
-    #[test]
-    fn parse_version_reads_opencode_output() {
-        assert_eq!(parse_version("opencode v2.0.18"), Some((2, 0, 18)));
-        assert_eq!(parse_version("opencode v2.1.0-beta.2\n"), Some((2, 1, 0)));
-        assert_eq!(parse_version("2.0.18"), Some((2, 0, 18)));
-        assert_eq!(parse_version("opencode"), None);
-        assert!(parse_version("opencode v2.0.22").unwrap() < MIN_VERSION);
-        assert!(parse_version("opencode v2.0.23").unwrap() >= MIN_VERSION);
     }
 }

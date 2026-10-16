@@ -40,9 +40,7 @@ pub fn agent_fork(
     let agents_dir = paths::agents_dir(project_root);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 
-    let source_entry = registry.get(source).ok_or_else(|| {
-        PmError::AgentNotFound(format!("'{source}' not found in scope '{feature}'"))
-    })?;
+    let source_entry = registry.require(source, feature)?;
 
     if source_entry.session_id.is_empty() {
         return Err(PmError::Agent(format!(

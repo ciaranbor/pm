@@ -1,7 +1,7 @@
 use pm::commands;
 use pm::error::{PmError, Result};
-use pm::state::paths;
 
+use super::scope::cwd_project_root;
 use crate::cli::StateCommands;
 
 pub(super) fn run(cmd: StateCommands) -> Result<()> {
@@ -10,7 +10,7 @@ pub(super) fn run(cmd: StateCommands) -> Result<()> {
             let msg = if global {
                 commands::state_cmd::global_init_with_remote(remote.as_deref())?
             } else {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let project_root = cwd_project_root()?;
                 commands::state_cmd::init_with_remote(&project_root, remote.as_deref())?
             };
             println!("{msg}");
@@ -25,7 +25,7 @@ pub(super) fn run(cmd: StateCommands) -> Result<()> {
                 })?;
                 commands::state_cmd::global_remote(&u)?
             } else {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let project_root = cwd_project_root()?;
                 commands::state_cmd::remote(&project_root, url.as_deref())?
             };
             println!("{msg}");
@@ -35,7 +35,7 @@ pub(super) fn run(cmd: StateCommands) -> Result<()> {
             let msg = if global {
                 commands::state_cmd::global_push()?
             } else {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let project_root = cwd_project_root()?;
                 commands::state_cmd::push(&project_root)?
             };
             println!("{msg}");
@@ -45,7 +45,7 @@ pub(super) fn run(cmd: StateCommands) -> Result<()> {
             let msg = if global {
                 commands::state_cmd::global_pull()?
             } else {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let project_root = cwd_project_root()?;
                 commands::state_cmd::pull(&project_root)?
             };
             println!("{msg}");
@@ -55,7 +55,7 @@ pub(super) fn run(cmd: StateCommands) -> Result<()> {
             let msg = if global {
                 commands::state_cmd::global_status()?
             } else {
-                let project_root = paths::find_project_root(&std::env::current_dir()?)?;
+                let project_root = cwd_project_root()?;
                 commands::state_cmd::status(&project_root)?
             };
             println!("{msg}");

@@ -156,7 +156,7 @@ pub(crate) fn window_values(agent: &AgentSnapshot) -> Vec<(&'static str, Option<
 /// window write knows only its state, and would clear it.
 pub(super) fn latest_value(agent: &AgentSnapshot) -> Option<String> {
     let latest = agent.latest.as_ref()?;
-    Some(format_text(&attention::cut(
+    Some(format_text(&crate::text::ellipsize(
         &latest.text,
         attention::LATEST_WIDTH,
     )))

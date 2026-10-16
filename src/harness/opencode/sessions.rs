@@ -36,6 +36,7 @@ use super::config::ModelRef;
 use super::{PASSWORD_ENV, binary, installed_version, random_password};
 use crate::bounded;
 use crate::error::{PmError, Result};
+use crate::harness::session_store::recorded_forms;
 use crate::harness::{ImportOutcome, InUse, per_session_outcome};
 use crate::harness::{LaunchContext, Probe, SpawnSpec};
 use crate::state::project::OpenCodeConfig;
@@ -54,19 +55,6 @@ const POLL: Duration = Duration::from_millis(200);
 struct Session {
     id: String,
     parent: Option<String>,
-}
-
-/// `dir` as given and, when it resolves to something else, as opencode
-/// records it for a session started there.
-fn recorded_forms(dir: &Path) -> Vec<String> {
-    let mut forms = vec![dir.to_string_lossy().into_owned()];
-    if let Ok(resolved) = dir.canonicalize() {
-        let resolved = resolved.to_string_lossy().into_owned();
-        if !forms.contains(&resolved) {
-            forms.push(resolved);
-        }
-    }
-    forms
 }
 
 /// The directory to bind a session to: the form the TUI reports its own

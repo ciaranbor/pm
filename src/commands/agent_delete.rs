@@ -31,12 +31,7 @@ pub fn agent_delete(
 
     let mut registry = AgentRegistry::load(&agents_dir, feature)?;
 
-    // Verify agent exists in the registry
-    if registry.get(agent_name).is_none() {
-        return Err(crate::error::PmError::AgentNotFound(format!(
-            "'{agent_name}' not found in scope '{feature}'"
-        )));
-    }
+    registry.require(agent_name, feature)?;
 
     registry.remove(agent_name);
     registry.save(&agents_dir, feature)?;

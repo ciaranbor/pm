@@ -3,7 +3,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error::Result;
+use crate::error::{PmError, Result};
 use crate::harness::{AgentSession, Conversation, Harness};
 use crate::state::paths;
 
@@ -90,6 +90,10 @@ pub fn conversation(project_root: &Path, scope: &str, agent: &str) -> Result<Opt
     }
 }
 
+fn not_found(name: &str, scope: &str) -> PmError {
+    PmError::AgentNotFound(format!("'{name}' not found in scope '{scope}'"))
+}
+
 fn default_active() -> bool {
     true
 }
@@ -162,6 +166,19 @@ impl AgentRegistry {
     /// Get a mutable agent entry by name.
     pub fn get_mut(&mut self, name: &str) -> Option<&mut AgentEntry> {
         self.agents.get_mut(name)
+    }
+
+    /// The entry for `name`, or [`PmError::AgentNotFound`] naming `scope`,
+    /// the scope this registry was loaded for.
+    pub fn require(&self, name: &str, scope: &str) -> Result<&AgentEntry> {
+        self.agents.get(name).ok_or_else(|| not_found(name, scope))
+    }
+
+    /// [`require`](Self::require), mutably.
+    pub fn require_mut(&mut self, name: &str, scope: &str) -> Result<&mut AgentEntry> {
+        self.agents
+            .get_mut(name)
+            .ok_or_else(|| not_found(name, scope))
     }
 
     /// List all agent names.

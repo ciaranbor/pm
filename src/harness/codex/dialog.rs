@@ -62,7 +62,7 @@ pub(in crate::harness) fn dialog(payload: &Value) -> Option<(Dialog, Value)> {
         .collect::<Option<_>>()?;
     let first = questions.first()?;
     let dialog = Dialog {
-        detail: Some(crate::harness::one_line(&first.question)),
+        detail: Some(crate::text::one_line(&first.question)),
         choices: vec![Choice::new(ANSWER_CHOICE, "Submit", false)],
         questions,
         ..Dialog::new(WaitingKind::Question)
