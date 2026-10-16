@@ -87,7 +87,7 @@ use toml_edit::{DocumentMut, Item, Table, value};
 
 use crate::error::{PmError, Result};
 use crate::fs_utils::write_atomic;
-use crate::harness::probe::{self, Probe};
+use crate::harness::probe::{self, Probe, parse_version};
 use crate::harness::{SpawnSpec, Wake};
 use crate::state::project::CodexConfig;
 use crate::state::runtime::{Endpoint, Inbound};
@@ -412,26 +412,9 @@ pub(super) fn trust_dir(codex_home: &Path, dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
-/// `(major, minor, patch)` from `codex --version` output (`codex-cli 0.156.0`).
-fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
-    let token = output.split_whitespace().last()?;
-    let mut nums = token
-        .split(|c: char| !c.is_ascii_digit())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.parse::<u32>().ok());
-    Some((nums.next()??, nums.next()??, nums.next()??))
-}
-
 /// The installed version's raw string, or `None` when `codex` can't be run.
 pub(super) fn installed_version(probe: Probe) -> Option<String> {
-    let exit = probe::run(BINARY, "--version", probe, || {
-        std::process::Command::new(BINARY)
-            .arg("--version")
-            .stdin(std::process::Stdio::null())
-            .output()
-            .map(probe::Exit::from)
-    })
-    .ok()?;
+    let exit = probe::run(BINARY, BINARY, "--version", probe).ok()?;
     exit.success.then(|| exit.stdout.trim().to_string())
 }
 
@@ -651,15 +634,5 @@ mod tests {
              own, which needs 0.160.0 or later"
         );
         assert_eq!(version_problem(Some("codex-cli 0.160.0")), None);
-    }
-
-    #[test]
-    fn parse_version_reads_codex_cli_output() {
-        assert_eq!(parse_version("codex-cli 0.156.0"), Some((0, 156, 0)));
-        assert_eq!(parse_version("codex-cli 1.2.0-alpha.3\n"), Some((1, 2, 0)));
-        assert_eq!(parse_version("codex-cli"), None);
-        assert_eq!(parse_version(""), None);
-        assert!(parse_version("codex-cli 0.160.0").unwrap() >= MIN_VERSION);
-        assert!(parse_version("codex-cli 0.159.1").unwrap() < MIN_VERSION);
     }
 }

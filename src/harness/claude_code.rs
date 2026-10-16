@@ -276,7 +276,7 @@ const SETTINGS_FILE: &str = "claude-settings.json";
 
 /// The installed version's raw string, or `None` when `claude` can't be run.
 pub(super) fn installed_version(probe: Probe) -> Option<String> {
-    let exit = run_probe("--version", probe).ok()?;
+    let exit = probe::run(BINARY, BINARY, "--version", probe).ok()?;
     exit.success.then(|| exit.stdout.trim().to_string())
 }
 
@@ -294,7 +294,7 @@ pub(super) const EXPORT_TAG: &str = "claude";
 pub(super) const WAKE: Wake = Wake::Rewake;
 
 pub(super) fn unusable_reason(probe: Probe) -> Option<String> {
-    let runs = run_probe("--version", probe).is_ok_and(|exit| exit.success);
+    let runs = probe::run(BINARY, BINARY, "--version", probe).is_ok_and(|exit| exit.success);
     (!runs).then(|| "`claude` could not be run; install Claude Code".to_string())
 }
 
@@ -319,18 +319,8 @@ fn help_lists_append_file(help: &str) -> bool {
 /// - `None`        — `claude` not found or `--help` failed; nothing to spawn
 ///   against anyway, so callers treat this as "can't tell, don't warn".
 pub(super) fn supports_append_file(probe: Probe) -> Option<bool> {
-    let exit = run_probe("--help", probe).ok()?;
+    let exit = probe::run(BINARY, BINARY, "--help", probe).ok()?;
     exit.success.then(|| help_lists_append_file(&exit.stdout))
-}
-
-fn run_probe(arg: &str, probe: Probe) -> std::io::Result<probe::Exit> {
-    probe::run(BINARY, arg, probe, || {
-        std::process::Command::new(BINARY)
-            .arg(arg)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .map(probe::Exit::from)
-    })
 }
 
 #[cfg(test)]
