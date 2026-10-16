@@ -9,7 +9,7 @@ Rust CLI using clap (derive macros). The module name matches the command
 (`commands/agent_fork.rs` ↔ `pm agent fork`), so navigate by the tree; module
 docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say.
 
-- **Layering** — `cli.rs`/`main.rs`/`dispatch/` parse and dispatch,
+- **Layering** — `cli/`/`main.rs`/`dispatch/` parse and dispatch,
   `commands/` handlers orchestrate, and all shelling-out is funnelled through
   wrappers (`git/`, `tmux.rs`, `gh.rs`, `editor.rs`, …) — never inline in a handler.
 - **State** (`state/`, TOML) — the pm config dir holds the global registry and
