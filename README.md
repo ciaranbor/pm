@@ -492,10 +492,10 @@ it. [`pm msg send`](#messaging) re-arms it. A Claude Code agent gets the
 prompt through its session's messaging socket when the session reported
 one, and a codex or opencode agent through its own server, whatever its
 window shows; `pm doctor` warns when Claude Code is too old for that or a
-`crossSessionInbound` setting refuses or holds it. Otherwise the
-agent is typed the prompt, and only when its input line is empty and takes text (not vim NORMAL mode) and no one
-is using its pane (a tmux mode such as copy or tree mode, or shown on an
-attached client); otherwise the message waits for a later send. A loop that wakes an
+`crossSessionInbound` setting refuses or holds it. pm never types into an
+agent's window to wake it: a session that reported no such channel is not
+re-armed, `pm msg send` says so, and nothing wakes it to read the message
+until it is prompted or restarted; `pm doctor` lists those sessions. A loop that wakes an
 agent turn after turn without its inbox draining stops itself and says so;
 `pm agent restart` starts it again. pm installs the hooks once per machine
 ([docs/harnesses.md](docs/harnesses.md#hooks)); `pm doctor --fix` restores a
@@ -535,8 +535,9 @@ wait. History stays on disk. `pm msg send` never spawns an
 agent: it errors on an inactive recipient, and respawns one whose window
 died, or whose harness exited to the shell in a window nobody is looking
 at. An `unarmed` recipient it [re-arms](#agents-are-message-processors)
-with the prompt the waiter would have given; when that cannot reach it, the
-message waits, and a socket nothing listens on any more is reported. All of
+with the prompt the waiter would have given; when that cannot reach it (its
+session reported no channel, or nothing listens on it any more), the
+message waits and the send says why. All of
 this holds for a recipient in another project too. A send then says what
 the recipient was doing, and so when it reads the message: idle (woken
 now), busy (at its turn's end), waiting on background work (woken now),

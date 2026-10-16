@@ -130,6 +130,13 @@ fn send_to_another_project_rearms_an_unarmed_agent() {
     server.wait_for_pane_text(&target, "❯");
     let unarmed = Waiting::now(WaitingKind::HookEnded, None);
     runtime::write_waiting(&beta, "main", "implementer", &unarmed).unwrap();
+    let socket = crate::testing::FakeSocket::bind(dir2.path());
+    let inbound = runtime::Inbound {
+        endpoint: runtime::Endpoint::Socket(socket.path.clone()),
+        token: None,
+        thread: None,
+    };
+    runtime::write_inbound(&beta, "main", "implementer", Some(&inbound)).unwrap();
 
     let status = send_as(
         &beta,
@@ -148,6 +155,7 @@ fn send_to_another_project_rearms_an_unarmed_agent() {
         ),
         "{status}"
     );
+    assert!(socket.post().contains("pm msg read"));
 }
 
 #[test]

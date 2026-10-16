@@ -257,7 +257,8 @@ pub fn send_as(
             }
             Err(e) => warnings.push(format!(
                 "message {index:03} is queued for '{recipient}@{feature}', but it could not be \
-                 re-armed: {e}"
+                 re-armed: {}",
+                e.reason()
             )),
         },
         Err(e) => warnings.push(format!(

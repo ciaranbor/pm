@@ -57,8 +57,8 @@ impl Harness {
     /// The channel a process outside the session posts it prompts through
     /// ([`post_prompt`](Self::post_prompt)), as its SessionStart hook,
     /// run for `agent`'s session `session_id`, finds it: in the environment
-    /// the hook runs in, or the agent's runtime dir. `None` for a harness
-    /// with none, which is then typed into.
+    /// the hook runs in, or the agent's runtime dir. `None` for a session
+    /// with none, which is then not re-armed.
     pub fn inbound(
         self,
         project_root: &Path,
