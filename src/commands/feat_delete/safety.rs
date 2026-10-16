@@ -14,10 +14,6 @@ pub struct SafetyReport {
 }
 
 impl SafetyReport {
-    pub fn is_blocked(&self) -> bool {
-        self.has_uncommitted_changes || self.has_unpushed_commits
-    }
-
     pub fn has_warnings(&self) -> bool {
         !self.untracked_files.is_empty()
     }

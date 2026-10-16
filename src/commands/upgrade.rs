@@ -28,12 +28,7 @@ pub fn upgrade_project(project_root: &Path) -> Result<Vec<String>> {
     // Bootstrap information store and state repo (both idempotent)
     super::docs::bootstrap(project_root)?;
     super::state_cmd::init(project_root)?;
-    // Migrate docs submodule to regular files if needed
-    if super::docs::migrate_docs_submodule(project_root).unwrap_or(false) {
-        updated.push("docs (migrated from submodule)".to_string());
-    } else {
-        updated.push("docs".to_string());
-    }
+    updated.push("docs".to_string());
 
     // One-shot: drop the bundled copies earlier releases installed per
     // project, so they can't shadow the global tier.
@@ -99,11 +94,6 @@ fn upgrade_project_dry_run(project_root: &Path) -> Result<(Vec<String>, bool)> {
             "Would initialise state repo in {}",
             display_path(project_root, &pm_dir)
         ));
-    }
-
-    // Submodule migration
-    if super::docs::would_migrate_docs_submodule(project_root) {
-        actions.push("Would migrate .pm/docs/ from submodule to regular files".to_string());
     }
 
     // Bundled copies left by earlier releases
@@ -185,87 +175,24 @@ fn display_path(project_root: &Path, path: &Path) -> String {
         .unwrap_or_else(|_| path.display().to_string())
 }
 
-/// Install the global tier, then upgrade every project registered in
-/// `projects_dir`: a summary line per project, a broken one included.
-fn upgrade_projects(projects_dir: &Path) -> Result<Vec<String>> {
-    let projects = ProjectEntry::list(projects_dir)?;
-    let global = GlobalConfig::load_or_default();
-
-    if projects.is_empty() {
-        let mut lines = install_global_lines(false);
-        lines.push("No registered projects".to_string());
-        return Ok(lines);
-    }
-
-    let mut lines = install_global_lines(false);
-    for (name, entry) in &projects {
-        // Skip legacy entries with non-portable roots — calling
-        // `to_portable` on a relative `PathBuf` would `debug_assert!` in
-        // debug builds and silently misbehave in release. `pm update`
-        // chains through here, so a single bad entry must not break the
-        // command users run to *pick up* the fix.
-        if !crate::path_utils::is_portable(&entry.root) {
-            lines.push(format!(
-                "{name}: skipped (non-portable root \"{}\" — run `pm state backfill` for details)",
-                entry.root
-            ));
-            continue;
-        }
-
-        // Migrate absolute paths to portable ~/… format on re-save
-        let portable = crate::path_utils::to_portable(&entry.root_path());
-        if portable != entry.root {
-            let migrated = ProjectEntry {
-                root: portable,
-                ..entry.clone()
-            };
-            migrated.save(projects_dir, name)?;
-        }
-
-        let root = entry.root_path();
-        if !entry.presence().is_here() {
-            lines.push(format!(
-                "{name}: skipped (not on this machine: run `pm restore {name}`)"
-            ));
-            continue;
-        }
-        let home = if onboard::is_home(&global, name, &root) {
-            onboard::write_skill(&root, false)
-        } else {
-            Ok(None)
-        };
-        match home.and_then(|skill| upgrade_project(&root).map(|l| (skill, l))) {
-            Ok((skill, project_lines)) => {
-                let mut project_lines = project_lines.into_iter();
-                if let Some(summary) = project_lines.next() {
-                    lines.push(format!("{name}: {summary}"));
-                }
-                lines.extend(skill.map(|s| format!("  Wrote home's {s}")));
-                lines.extend(project_lines.map(|l| format!("  {l}")));
-            }
-            Err(e) => lines.push(format!("{name}: error: {e}")),
-        }
-    }
-    Ok(lines)
-}
-
-/// Dry-run variant of [`upgrade_projects`], and whether the hooks agents
-/// launch with would change in any project.
-fn upgrade_projects_dry_run(projects_dir: &Path) -> Result<(Vec<String>, bool)> {
+/// Install the global tier, then upgrade (or preview upgrading) every
+/// project registered in `projects_dir`: a summary line per project, a
+/// broken one included. Also returns whether the hooks agents launch with
+/// would change in any project (always `false` when not a dry run).
+fn upgrade_projects(projects_dir: &Path, dry_run: bool) -> Result<(Vec<String>, bool)> {
     let projects = ProjectEntry::list(projects_dir)?;
     let global = GlobalConfig::load_or_default();
     let mut hooks_change = false;
 
+    let mut lines = install_global_lines(dry_run);
     if projects.is_empty() {
-        let mut lines = install_global_lines(true);
         lines.push("No registered projects".to_string());
         return Ok((lines, hooks_change));
     }
 
-    let mut lines = install_global_lines(true);
     for (name, entry) in &projects {
-        // Same guard as in upgrade_projects: never resolve a non-portable root
-        // against the caller's CWD.
+        // A relative root would resolve against the caller's CWD; skip it
+        // rather than fail, since `pm update` is how users pick up fixes.
         if !crate::path_utils::is_portable(&entry.root) {
             lines.push(format!(
                 "{name}: skipped (non-portable root \"{}\" — run `pm state backfill` for details)",
@@ -273,7 +200,6 @@ fn upgrade_projects_dry_run(projects_dir: &Path) -> Result<(Vec<String>, bool)> 
             ));
             continue;
         }
-
         let root = entry.root_path();
         if !entry.presence().is_here() {
             lines.push(format!(
@@ -281,27 +207,58 @@ fn upgrade_projects_dry_run(projects_dir: &Path) -> Result<(Vec<String>, bool)> 
             ));
             continue;
         }
-        let actions = upgrade_project_dry_run(&root).and_then(|(mut actions, hooks)| {
-            hooks_change |= hooks;
-            if onboard::is_home(&global, name, &root) {
-                actions.extend(onboard::write_skill(&root, true)?);
-            }
-            Ok(actions)
-        });
-        match actions {
-            Ok(actions) if actions.is_empty() => {
-                lines.push(format!("{name}: up to date"));
-            }
-            Ok(actions) => {
-                lines.push(format!("{name}:"));
-                for action in actions {
-                    lines.push(format!("  {action}"));
-                }
-            }
+        let is_home = onboard::is_home(&global, name, &root);
+        let result = if dry_run {
+            preview_one(name, &root, is_home, &mut hooks_change)
+        } else {
+            upgrade_one(name, &root, is_home)
+        };
+        match result {
+            Ok(project_lines) => lines.extend(project_lines),
             Err(e) => lines.push(format!("{name}: error: {e}")),
         }
     }
     Ok((lines, hooks_change))
+}
+
+/// Run [`upgrade_project`] on `root`, writing home's skill if `is_home`;
+/// returns a `name: <summary>` line then indented detail lines.
+fn upgrade_one(name: &str, root: &Path, is_home: bool) -> Result<Vec<String>> {
+    let skill = if is_home {
+        onboard::write_skill(root, false)?
+    } else {
+        None
+    };
+    let mut project_lines = upgrade_project(root)?.into_iter();
+    let mut lines = Vec::new();
+    if let Some(summary) = project_lines.next() {
+        lines.push(format!("{name}: {summary}"));
+    }
+    lines.extend(skill.map(|s| format!("  Wrote home's {s}")));
+    lines.extend(project_lines.map(|l| format!("  {l}")));
+    Ok(lines)
+}
+
+/// Run [`upgrade_project_dry_run`] on `root`, previewing home's skill if
+/// `is_home`; returns a `name:` line then indented actions, or one
+/// `name: up to date` line.
+fn preview_one(
+    name: &str,
+    root: &Path,
+    is_home: bool,
+    hooks_change: &mut bool,
+) -> Result<Vec<String>> {
+    let (mut actions, hooks) = upgrade_project_dry_run(root)?;
+    *hooks_change |= hooks;
+    if is_home {
+        actions.extend(onboard::write_skill(root, true)?);
+    }
+    if actions.is_empty() {
+        return Ok(vec![format!("{name}: up to date")]);
+    }
+    let mut lines = vec![format!("{name}:")];
+    lines.extend(actions.into_iter().map(|a| format!("  {a}")));
+    Ok(lines)
 }
 
 /// Install (or preview installing) the shared global asset tier, install
@@ -359,11 +316,7 @@ fn upgrade_in(
     dry_run: bool,
     tmux_server: Option<&str>,
 ) -> Result<Vec<String>> {
-    let (mut lines, hooks_change) = if dry_run {
-        upgrade_projects_dry_run(projects_dir)?
-    } else {
-        (upgrade_projects(projects_dir)?, false)
-    };
+    let (mut lines, hooks_change) = upgrade_projects(projects_dir, dry_run)?;
     // What agents launch with that the upgrade would change: the global
     // tier's definitions and baseline, and the hooks.
     let launch_changes =
@@ -796,7 +749,7 @@ last_active = "2026-01-01T00:00:00Z"
             .unwrap();
         }
 
-        let lines = upgrade_projects(&projects_dir).unwrap();
+        let lines = upgrade_projects(&projects_dir, false).unwrap().0;
         let joined = lines.join("\n");
         assert!(
             joined.contains("one: Upgraded") && joined.contains("two: Upgraded"),
@@ -839,12 +792,17 @@ last_active = "2026-01-01T00:00:00Z"
 
         let skip = "husk: skipped (not on this machine: run `pm restore husk`)".to_string();
         assert!(
-            upgrade_projects_dry_run(&projects_dir)
+            upgrade_projects(&projects_dir, true)
                 .unwrap()
                 .0
                 .contains(&skip)
         );
-        assert!(upgrade_projects(&projects_dir).unwrap().contains(&skip));
+        assert!(
+            upgrade_projects(&projects_dir, false)
+                .unwrap()
+                .0
+                .contains(&skip)
+        );
         assert!(!husk.join(".pm/docs").exists());
         assert!(!husk.join(".pm/.git").exists());
     }
@@ -867,7 +825,7 @@ last_active = "2026-01-01T00:00:00Z"
         .save(&projects_dir, "good")
         .unwrap();
 
-        let lines = upgrade_projects(&projects_dir).unwrap();
+        let lines = upgrade_projects(&projects_dir, false).unwrap().0;
         let joined = lines.join("\n");
         assert!(
             joined.contains("exo-bench: skipped (non-portable root")
@@ -879,7 +837,7 @@ last_active = "2026-01-01T00:00:00Z"
             "good project should not be skipped, got: {joined}"
         );
 
-        let (lines, _) = upgrade_projects_dry_run(&projects_dir).unwrap();
+        let (lines, _) = upgrade_projects(&projects_dir, true).unwrap();
         assert!(
             lines
                 .join("\n")

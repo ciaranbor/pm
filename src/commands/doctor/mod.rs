@@ -78,10 +78,8 @@ pub enum IssueKind {
     RedundantOverride,
     /// A project custom skill the harness resolves its global namesake over.
     SkillShadowedByGlobal,
-    /// An active agent is named `claude`, the removed vanilla alias: it runs
-    /// until its window dies, then restart/heal fail to resolve a definition.
-    /// Also an agent registered as `default` in a project `pm update` has not
-    /// yet migrated to `plain` (`commands::vanilla_rename`).
+    /// An agent registered as `default` in a project `pm update` has not yet
+    /// migrated to `plain` (`commands::vanilla_rename`).
     LegacyVanillaAgentName,
     /// An `[agents.*]` row keyed `default`, which names no definition: it
     /// reads as a catch-all but matches only an agent defined as `default`.

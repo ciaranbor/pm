@@ -211,7 +211,7 @@ pub fn load_and_validate_workflow(project_root: &Path, name: &str) -> Result<Wor
         paths::home_dir().ok().as_deref(),
         &Disabled::load(),
     )?;
-    harness_check::check_team(project_root, name, def.effective_team())?;
+    harness_check::check_team(project_root, name, &def.agents)?;
     Ok(def)
 }
 

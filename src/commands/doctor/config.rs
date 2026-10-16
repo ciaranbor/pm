@@ -212,7 +212,7 @@ fn worktree_definitions(project_root: &Path) -> Result<Vec<(PathBuf, Vec<String>
             && let Some(name) = &feature.workflow
             && let Ok(def) = workflow::WorkflowDef::load(project_root, name)
         {
-            definitions.extend(def.effective_team().iter().cloned());
+            definitions.extend(def.agents.iter().cloned());
         }
         out.push((wt, definitions));
     }

@@ -8,7 +8,7 @@ use super::TimingLog;
 use crate::error::Result;
 use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
-use crate::state::scope;
+use crate::state::{paths, scope};
 use crate::{git, messages, tmux};
 
 /// Parameters for feature cleanup.
@@ -154,22 +154,6 @@ pub(crate) fn cleanup_feature_with_timing(
         }};
     }
 
-    // Step 0: Keep the summary while the worktree that may hold a legacy one
-    // still exists.
-    let mut summary = None;
-    run!(tlog, "collect-summary", params.best_effort, {
-        if params.ending.is_some()
-            && let Some(project_root) = params.features_dir.parent().and_then(Path::parent)
-        {
-            summary = crate::commands::feat_summary::collect(
-                project_root,
-                params.worktree_path,
-                params.name,
-            )?;
-        }
-        Ok(())
-    })?;
-
     // Step 1: Remove git worktree
     run!(
         tlog,
@@ -228,6 +212,8 @@ pub(crate) fn cleanup_feature_with_timing(
             && let Some(pm_dir) = params.features_dir.parent()
             && let Some(project_root) = pm_dir.parent()
         {
+            let summary = paths::summary_path(project_root, params.name);
+            let summary = summary.exists().then_some(summary);
             messages::send_with_scope(
                 &pm_dir.join("messages"),
                 scope::MAIN,

@@ -187,37 +187,30 @@ fn loop_issue(
     })
 }
 
-/// One warning per active agent in `scope` whose effective definition is
-/// `claude`, the removed vanilla alias (spawned by a pre-`default` solo), and
-/// per agent registered as `default` before this project's `plain` migration.
+/// One warning per agent in `scope` registered as `default` before this
+/// project's `plain` migration.
 pub(super) fn legacy_vanilla_agent_issues(project_root: &Path, scope: &str) -> Vec<Issue> {
     let Ok(registry) = AgentRegistry::load(&paths::agents_dir(project_root), scope) else {
         return Vec::new();
     };
-    let unmigrated = !vanilla_rename::is_migrated(project_root);
+    if vanilla_rename::is_migrated(project_root) {
+        return Vec::new();
+    }
     registry
         .agents
         .iter()
-        .filter(|(_, entry)| entry.agent_type == AgentType::Agent)
-        .filter_map(|(name, entry)| match entry.effective_definition(name) {
-            "claude" if entry.active => Some(Issue {
-                kind: IssueKind::LegacyVanillaAgentName,
-                message: format!(
-                    "agent '{name}' uses removed vanilla agent name 'claude' and cannot be \
-                     restarted (stop it and respawn as '{VANILLA_AGENT}')"
-                ),
-                fix: Fix::None,
-            }),
-            LEGACY_VANILLA_AGENT if unmigrated => Some(Issue {
-                kind: IssueKind::LegacyVanillaAgentName,
-                message: format!(
-                    "agent '{name}' was spawned as vanilla agent '{LEGACY_VANILLA_AGENT}', now \
-                     '{VANILLA_AGENT}': it cannot be restarted until it is migrated (run `pm \
-                     upgrade`)"
-                ),
-                fix: Fix::Auto(FixAction::MigrateVanillaAgents),
-            }),
-            _ => None,
+        .filter(|(name, entry)| {
+            entry.agent_type == AgentType::Agent
+                && entry.effective_definition(name) == LEGACY_VANILLA_AGENT
+        })
+        .map(|(name, _)| Issue {
+            kind: IssueKind::LegacyVanillaAgentName,
+            message: format!(
+                "agent '{name}' was spawned as vanilla agent '{LEGACY_VANILLA_AGENT}', now \
+                 '{VANILLA_AGENT}': it cannot be restarted until it is migrated (run `pm \
+                 upgrade`)"
+            ),
+            fix: Fix::Auto(FixAction::MigrateVanillaAgents),
         })
         .collect()
 }
@@ -325,64 +318,6 @@ mod tests {
 
         spawn();
         assert!(loop_issues("login", &opencode).is_empty());
-    }
-
-    #[test]
-    fn legacy_claude_agent_name_is_flagged() {
-        let dir = tempdir().unwrap();
-        let server = TestServer::new();
-        let (project_path, _) = server.setup_project_with_feature(dir.path(), "login");
-        let projects_dir = TestServer::registry_dir(&project_path);
-        let agents_dir = paths::agents_dir(&project_path);
-        let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
-        registry.register(
-            "claude",
-            crate::state::agent::AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "claude".to_string(),
-                active: true,
-                agent_definition: None,
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
-        registry.register(
-            "dev",
-            crate::state::agent::AgentEntry {
-                agent_type: AgentType::Agent,
-                session_id: String::new(),
-                window_name: "dev".to_string(),
-                active: true,
-                agent_definition: Some("plain".to_string()),
-                harness: Harness::ClaudeCode,
-                spawned_at: None,
-            },
-        );
-        registry.save(&agents_dir, "login").unwrap();
-
-        let lines = doctor(&project_path, &projects_dir, false, server.name())
-            .unwrap()
-            .lines();
-        assert!(
-            lines.iter().any(|l| l.contains("login")
-                && l.contains("agent 'claude' uses removed vanilla agent name")),
-            "{lines:?}"
-        );
-        assert!(
-            !lines.iter().any(|l| l.contains("agent 'dev' uses removed")),
-            "{lines:?}"
-        );
-
-        registry.get_mut("claude").unwrap().active = false;
-        registry.save(&agents_dir, "login").unwrap();
-        let lines = doctor(&project_path, &projects_dir, false, server.name())
-            .unwrap()
-            .lines();
-        assert!(
-            !lines.iter().any(|l| l.contains("uses removed")),
-            "{lines:?}"
-        );
     }
 
     #[test]

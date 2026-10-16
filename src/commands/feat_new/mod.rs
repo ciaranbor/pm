@@ -214,7 +214,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
     // The full team is spawned; the brief subset receives --context.
     let team: &[String] = workflow_def
         .as_ref()
-        .map(|d| d.effective_team())
+        .map(|d| d.agents.as_slice())
         .unwrap_or(&[]);
     let brief_agents: &[String] = workflow_def
         .as_ref()

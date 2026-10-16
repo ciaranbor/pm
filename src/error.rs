@@ -172,6 +172,13 @@ pub enum PmError {
     )]
     WorkflowNamesLegacyVanilla { workflow: String },
 
+    #[error(
+        "{} sets `auto_spawn`, which pm no longer reads: list the team in `agents` and the \
+         agents that get the brief in `brief_agents`.",
+        .path.display()
+    )]
+    WorkflowAutoSpawn { path: PathBuf },
+
     #[error("Agent error: {0}")]
     Agent(String),
 
