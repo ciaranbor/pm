@@ -23,7 +23,7 @@ impl TestServer {
     ) -> (std::path::PathBuf, std::path::PathBuf, String) {
         let (project_path, projects_dir, project_name) = self.setup_project(dir);
         let main = crate::state::paths::main_worktree(&project_path);
-        crate::git::rename_branch(&main, "main", "master").unwrap();
+        crate::git::run_git(&main, &["branch", "-m", "main", "master"]).unwrap();
         let mut entry =
             crate::state::project::ProjectEntry::load(&projects_dir, &project_name).unwrap();
         entry.main_branch = "master".to_string();

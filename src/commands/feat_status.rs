@@ -74,25 +74,16 @@ fn check_ready(project_root: &Path, scope: &str) -> Result<()> {
                 .into(),
         ));
     }
-    let state = FeatureState::load(&paths::features_dir(project_root), scope)?;
+    FeatureState::load(&paths::features_dir(project_root), scope)?;
     let summary = paths::summary_path(project_root, scope);
     if std::fs::read_to_string(&summary).is_ok_and(|s| !s.trim().is_empty()) {
         return Ok(());
     }
-    let mut msg = format!(
+    Err(PmError::Summary(format!(
         "feature '{scope}' has no summary; write one at {} (`pm feat summary path`) \
          before marking it ready",
         summary.display()
-    );
-    let legacy = project_root.join(&state.worktree).join("summary.md");
-    if legacy.exists() {
-        msg.push_str(&format!(
-            ". Its worktree has a summary.md: move it there with `mv {} {}`",
-            legacy.display(),
-            summary.display()
-        ));
-    }
-    Err(PmError::Summary(msg))
+    )))
 }
 
 /// What `pm feat status [STATUS] [NAME] [-m REASON]` asks for.
@@ -174,34 +165,8 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("pm feat summary path"), "{err}");
-        assert!(!err.to_string().contains("summary.md"), "{err}");
         assert_eq!(progress(&project, "login"), Progress::Wip);
         assert!(main_inbox(&project).is_empty());
-    }
-
-    #[test]
-    fn ready_refusal_points_at_a_legacy_worktree_summary() {
-        let dir = tempdir().unwrap();
-        let (project, _) =
-            TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
-        std::fs::write(project.join("login/summary.md"), "notes").unwrap();
-
-        let err = feat_status(
-            &project,
-            "login",
-            Progress::Ready,
-            None,
-            Some("implementer"),
-            crate::testing::NO_SERVER,
-        )
-        .unwrap_err();
-
-        let hint = format!(
-            "`mv {} {}`",
-            project.join("login/summary.md").display(),
-            paths::summary_path(&project, "login").display()
-        );
-        assert!(err.to_string().contains(&hint), "{err}");
     }
 
     #[test]

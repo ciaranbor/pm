@@ -112,7 +112,7 @@ impl Disabled {
         let mut main_workflow_listed = false;
         for w in workflow::list_installed_in(Some(project_root), global_dir)?.workflows {
             main_workflow_listed |= w.name == scope::MAIN_WORKFLOW;
-            for agent in w.def.effective_team().iter().filter(|a| agent_missing(a)) {
+            for agent in w.def.agents.iter().filter(|a| agent_missing(a)) {
                 out.push(format!("workflow '{}' needs agent '{agent}'", w.name));
             }
         }

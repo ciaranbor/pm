@@ -46,14 +46,12 @@ pub struct WorkflowDef {
     pub when_to_use: Option<String>,
     /// The full agent team for the workflow. **All** of these are spawned
     /// at `pm feat new`/`feat adopt --workflow <name>` time (with or
-    /// without `--context`). Empty falls back to `brief_agents` for
-    /// back-compat with custom workflows that only set the old field.
+    /// without `--context`).
     #[serde(default)]
     pub agents: Vec<String>,
     /// Subset of the team that receives a copy of the `--context` brief.
-    /// Spawning is *not* its job — that's `agents`. Accepts the legacy
-    /// `auto_spawn` key so already-installed configs keep parsing.
-    #[serde(default, alias = "auto_spawn")]
+    /// Spawning is *not* its job — that's `agents`.
+    #[serde(default)]
     pub brief_agents: Vec<String>,
 }
 
@@ -77,26 +75,21 @@ impl WorkflowDef {
     }
 
     fn load_from_dir(dir: &Path) -> Result<Self> {
-        let content = std::fs::read_to_string(dir.join("config.toml"))?;
-        let def: Self = toml::from_str(&content)?;
-        Ok(def)
-    }
-
-    /// The effective spawn set: the full `agents` team, or — when that's
-    /// empty — `brief_agents` (back-compat for custom workflows that only
-    /// set the old field). This is the set pm spawns at feature creation.
-    pub fn effective_team(&self) -> &[String] {
-        if self.agents.is_empty() {
-            &self.brief_agents
-        } else {
-            &self.agents
+        let path = dir.join("config.toml");
+        let content = std::fs::read_to_string(&path)?;
+        let table: toml::Table = toml::from_str(&content)?;
+        // Serde would silently drop `auto_spawn`, leaving a workflow that only
+        // sets it with no team.
+        if table.contains_key("auto_spawn") {
+            return Err(PmError::WorkflowAutoSpawn { path });
         }
+        Ok(table.try_into()?)
     }
 
     /// Validate the workflow's spawn set:
-    ///   1. every member of the effective team has a definition file in a
-    ///      canonical store (see [`definition_paths`]), and
-    ///   2. every `brief_agents` entry is a member of the effective team.
+    ///   1. every member of `agents` has a definition file in a canonical
+    ///      store (see [`definition_paths`]), and
+    ///   2. every `brief_agents` entry is a member of `agents`.
     ///
     /// The feature worktree typically doesn't exist yet when this runs, so
     /// it isn't consulted.
@@ -118,7 +111,7 @@ impl WorkflowDef {
         workflow_name: &str,
         home: Option<&Path>,
     ) -> Result<()> {
-        let team = self.effective_team();
+        let team = &self.agents;
         for agent in team {
             // The reserved vanilla name needs no definition file.
             if is_vanilla(agent) {
@@ -415,56 +408,6 @@ when_to_use = "use it here"
     }
 
     #[test]
-    fn parses_legacy_auto_spawn_via_serde_alias() {
-        // User-created workflows copied from an old bundle may still say
-        // `auto_spawn`. The serde alias keeps them parsing into `brief_agents`.
-        let dir = tempdir().unwrap();
-        write_workflow(
-            dir.path(),
-            "demo",
-            r#"description = "x"
-agents = ["a", "b"]
-auto_spawn = ["a"]
-"#,
-        );
-        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
-        assert_eq!(def.brief_agents, vec!["a".to_string()]);
-    }
-
-    #[test]
-    fn effective_team_falls_back_to_brief_agents_when_agents_empty() {
-        let dir = tempdir().unwrap();
-        write_workflow(
-            dir.path(),
-            "demo",
-            r#"description = "x"
-auto_spawn = ["a", "b"]
-"#,
-        );
-        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
-        assert!(def.agents.is_empty());
-        assert_eq!(def.effective_team(), &["a".to_string(), "b".to_string()]);
-    }
-
-    #[test]
-    fn effective_team_is_agents_when_present() {
-        let dir = tempdir().unwrap();
-        write_workflow(
-            dir.path(),
-            "demo",
-            r#"description = "x"
-agents = ["a", "b", "c"]
-brief_agents = ["a"]
-"#,
-        );
-        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
-        assert_eq!(
-            def.effective_team(),
-            &["a".to_string(), "b".to_string(), "c".to_string()]
-        );
-    }
-
-    #[test]
     fn errors_on_missing_description() {
         let dir = tempdir().unwrap();
         write_workflow(dir.path(), "demo", "agents = [\"a\"]\n");
@@ -677,9 +620,7 @@ brief_agents = ["reviewer"]
     }
 
     #[test]
-    fn validate_uses_brief_agents_fallback_when_agents_empty() {
-        // Custom workflow with only the legacy field: the effective team is
-        // `brief_agents`, so its members must have definitions.
+    fn a_config_still_on_auto_spawn_fails_to_load_naming_its_replacement() {
         let dir = tempdir().unwrap();
         write_workflow(
             dir.path(),
@@ -688,13 +629,15 @@ brief_agents = ["reviewer"]
 auto_spawn = ["implementer"]
 "#,
         );
-        let main_agents = paths::main_worktree(dir.path()).join(".agents/agents");
-        std::fs::create_dir_all(&main_agents).unwrap();
-        std::fs::write(main_agents.join("implementer.md"), "stub").unwrap();
 
-        let def = WorkflowDef::load(dir.path(), "demo").unwrap();
-        def.validate_with_home(dir.path(), "demo", Some(dir.path()))
-            .unwrap();
+        let err = WorkflowDef::load(dir.path(), "demo").unwrap_err();
+
+        assert!(matches!(err, PmError::WorkflowAutoSpawn { .. }), "{err}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("`agents`") && msg.contains("`brief_agents`"),
+            "{msg}"
+        );
     }
 
     fn write_global_workflow(global_dir: &Path, name: &str, body: &str) {

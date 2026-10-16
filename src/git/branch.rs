@@ -36,6 +36,7 @@ pub fn branch_exists(repo: &Path, name: &str) -> Result<bool> {
 }
 
 /// Rename a local branch.
+#[cfg(test)]
 pub fn rename_branch(repo: &Path, old_name: &str, new_name: &str) -> Result<()> {
     run_git(repo, &["branch", "-m", old_name, new_name])?;
     Ok(())

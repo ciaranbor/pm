@@ -38,7 +38,7 @@ pub const DEFAULT_ORCHESTRATOR: &str = "main";
 pub fn orchestrator_definition(project_root: &Path) -> String {
     WorkflowDef::load(project_root, MAIN_WORKFLOW)
         .ok()
-        .and_then(|def| def.effective_team().first().cloned())
+        .and_then(|def| def.agents.first().cloned())
         .unwrap_or_else(|| DEFAULT_ORCHESTRATOR.to_string())
 }
 

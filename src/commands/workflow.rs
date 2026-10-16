@@ -176,7 +176,7 @@ pub fn list_rows_in(
         }
         if let Some(agent) = w
             .def
-            .effective_team()
+            .agents
             .iter()
             .find(|a| disabled.agent(a) && !resolves(a))
         {

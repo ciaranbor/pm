@@ -8,8 +8,6 @@
 //!
 //! A merge or delete keeps the summary for `main`, which triages it on the
 //! cleanup notice and deletes it; until then the name cannot be reused.
-//! A `summary.md` left in the worktree by features that predate this is
-//! collected there too.
 
 use std::path::{Path, PathBuf};
 
@@ -46,27 +44,6 @@ pub(crate) fn ensure_no_untriaged(project_root: &Path, name: &str) -> Result<()>
         )));
     }
     Ok(())
-}
-
-/// Keep a feature's summary for `main` before its worktree goes. Returns
-/// its path, if there is one.
-pub(crate) fn collect(project_root: &Path, worktree: &Path, name: &str) -> Result<Option<PathBuf>> {
-    let summary = paths::summary_path(project_root, name);
-    let legacy = worktree.join("summary.md");
-    if legacy.exists() {
-        if summary.exists() {
-            eprintln!(
-                "warning: dropped {} in favour of the summary in pm state",
-                legacy.display()
-            );
-        } else {
-            // Copied, not moved: a committed summary.md would otherwise leave
-            // the worktree dirty and block its removal.
-            std::fs::create_dir_all(paths::summaries_dir(project_root))?;
-            std::fs::copy(&legacy, &summary)?;
-        }
-    }
-    Ok(summary.exists().then_some(summary))
 }
 
 #[cfg(test)]
@@ -106,30 +83,5 @@ mod tests {
             path(&project, "nope"),
             Err(PmError::FeatureNotFound(_))
         ));
-    }
-
-    #[test]
-    fn collect_keeps_the_pm_summary_over_a_legacy_one() {
-        let dir = tempdir().unwrap();
-        let (project, _) =
-            TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
-        write(&project, "login", "current");
-        std::fs::write(project.join("login/summary.md"), "legacy").unwrap();
-
-        let left = collect(&project, &project.join("login"), "login").unwrap();
-
-        assert_eq!(left, Some(paths::summary_path(&project, "login")));
-        assert_eq!(show(&project, "login").unwrap(), "current");
-    }
-
-    #[test]
-    fn collect_without_any_summary_leaves_nothing_to_triage() {
-        let dir = tempdir().unwrap();
-        let (project, _) =
-            TestServer::new().setup_project_with_feature_no_tmux(dir.path(), "login");
-
-        let left = collect(&project, &project.join("login"), "login").unwrap();
-
-        assert_eq!(left, None);
     }
 }

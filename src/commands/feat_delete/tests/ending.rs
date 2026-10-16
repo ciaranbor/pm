@@ -1,35 +1,6 @@
 use super::*;
 
 #[test]
-fn delete_collects_a_legacy_summary_md_for_main() {
-    let dir = tempdir().unwrap();
-    let server = TestServer::new();
-    let (project_path, _) = server.setup_project_with_feature_no_tmux(dir.path(), "login");
-    std::fs::write(
-        project_path.join("login/summary.md"),
-        "Feature notes here.\n",
-    )
-    .unwrap();
-
-    delete(&server, &project_path, false);
-
-    assert_eq!(
-        std::fs::read_to_string(paths::summary_path(&project_path, "login")).unwrap(),
-        "Feature notes here.\n"
-    );
-    let inbox = main_inbox(&project_path);
-    assert_eq!(inbox.len(), 1);
-    assert!(
-        inbox[0].contains(
-            &paths::summary_path(&project_path, "login")
-                .display()
-                .to_string()
-        ),
-        "{inbox:?}"
-    );
-}
-
-#[test]
 fn delete_of_a_merged_ready_feature_main_has_read_keeps_its_summary_and_notifies_main() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
