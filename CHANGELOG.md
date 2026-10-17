@@ -18,6 +18,40 @@ the check.
 adopting branches and checking status. `pm update` deletes skills, agents
 and workflows pm no longer ships from `~/.agents/` and each harness's copy,
 and `[bundled.disable]` warns about naming one, as for any unknown name.
+- Agents are woken without typing for every harness: codex through its own
+app server, opencode through a per-agent server, Claude Code through its
+messaging socket. pm never types into an agent's pane; an agent whose session
+reports no wake channel is named by `pm msg send` and `pm doctor`. Restart
+running agents to switch them over.
+- `pm msg send --in <duration>` holds a message for later; `pm msg scheduled`
+and `pm msg cancel` list and drop held sends. A wake-up now names the sender
+and quotes the message's first line, `pm msg send` says what the recipient is
+doing, and messages sent from a plain shell are no longer repliable.
+- Switch an agent's permission mode with `pm agent mode <name> [<mode>]` or the
+app's mode pill (Claude Code and codex).
+- Claude Code agents may always run pm's read-only commands (`pm msg read`,
+`pm workflow show`, `pm feat status`, …), so auto mode no longer blocks them;
+an agent whose `pm msg read` is still refused stops being woken at once and
+says why. Auto-mode denials, the auto-mode proposal and dialogs no hook
+reports show in the status view and app.
+- A feature's agents can't edit main's checkout with file-edit tools.
+- New worktrees copy files listed in `.worktreeinclude`, are locked, and start
+from a freshly fetched base.
+- Status views and the app show each agent's latest reply as one line. A
+stopped agent keeps showing why it stopped, and every restart hint names its
+project and scope.
+- `[harness.codex] trust_pm_hooks = true` (global) lets pm trust its own codex
+hooks at install.
+- qa's Blocked verdict stops a feature from finishing.
+- `pm doctor` reports workflow configs that fail to load; a leftover
+`auto_spawn` key is now an error.
+- Removed: migrations from layouts older than 0.2.0 (docs as a nested repo,
+absolute registry roots, worktree `summary.md`); upgrade from those with an
+older pm first.
+- Fixes: saving pm's state files is safe against concurrent writers; harness
+version checks can't hang; `pm feat adopt --from` keeps a worktree's full
+name in its backup; spawning into a closed session names the `pm open`
+command.
 
 ## 0.7.0 — 2026-10-12
 
