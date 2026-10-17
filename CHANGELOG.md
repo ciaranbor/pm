@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.7.1 — 2026-10-17
+
 - `pm update` replaces `pm self-update` and `pm upgrade`: it installs the
 latest release if it is newer than the running pm, then upgrades every
 project with it. A build from source is replaced too once a newer release
