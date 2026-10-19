@@ -133,6 +133,7 @@ fn questions(input: &Value) -> Option<Dialog> {
                     .map(|o| QuestionOption {
                         label: text(o, "label"),
                         description: text(o, "description"),
+                        preview: Some(text(o, "preview")).filter(|p| !p.is_empty()),
                     })
                     .collect(),
                 multi_select: !free && q.get("multiSelect").and_then(Value::as_bool) == Some(true),
@@ -359,7 +360,7 @@ mod tests {
         let input = json!({"questions": [
             {"question": "Which DB?", "header": "DB", "multiSelect": false,
              "options": [{"label": "Postgres", "description": "server"},
-                         {"label": "SQLite", "description": "file"}]},
+                         {"label": "SQLite", "description": "file", "preview": "db.sqlite"}]},
             {"question": "Which features?", "header": "Features", "multiSelect": true,
              "options": [{"label": "Auth", "description": ""},
                          {"label": "Search", "description": ""}]},
@@ -377,6 +378,11 @@ mod tests {
         assert_eq!(ids(d), [ANSWER_CHOICE, DECLINE]);
         assert!(!d.questions[0].multi_select && d.questions[1].multi_select);
         assert_eq!(d.questions[0].options[1].label, "SQLite");
+        assert_eq!(
+            d.questions[0].options[1].preview.as_deref(),
+            Some("db.sqlite")
+        );
+        assert_eq!(d.questions[0].options[0].preview, None);
         assert!(d.questions[2].options.is_empty(), "a number question");
         assert!(d.questions.iter().all(|q| q.custom));
 
