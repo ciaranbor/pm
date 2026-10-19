@@ -20,6 +20,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +28,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -184,13 +187,15 @@ internal fun MessageField(
     send: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(focus) { focus.requestFocus() }
     Column(modifier) {
         OutlinedTextField(
             value = form.message,
             onValueChange = { form.message = it },
             placeholder = { Text("Tell the agent what to do instead (optional)") },
             maxLines = 4,
-            modifier = Modifier.fillMaxWidth().padding(top = Spacing.s),
+            modifier = Modifier.fillMaxWidth().padding(top = Spacing.s).focusRequester(focus),
         )
         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
             TextButton(onClick = { form.messaging = null }, enabled = !pending) { Text("Cancel") }

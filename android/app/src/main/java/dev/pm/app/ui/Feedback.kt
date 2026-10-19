@@ -59,7 +59,7 @@ private const val PENDING = "In progress"
  * While `pending`, the button's `label` and that it is in progress: the label is hidden then, and
  * accessibility skips what is drawn transparent.
  */
-private fun Modifier.pendingSemantics(pending: Boolean, label: String) = semantics {
+internal fun Modifier.pendingSemantics(pending: Boolean, label: String) = semantics {
     if (pending) {
         contentDescription = label
         stateDescription = PENDING

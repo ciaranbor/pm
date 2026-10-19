@@ -151,6 +151,38 @@ class DialogScreenshotTest {
 
     private val lone = question.copy(id = "d4", questions = question.questions.take(1))
 
+    private val long =
+        lone.copy(
+            id = "d5",
+            questions =
+                listOf(
+                    Dialog.Question(
+                        "The cache sits in front of every read, so the store it uses decides " +
+                            "how the app behaves offline, how much memory it takes, and what a " +
+                            "restart loses.\n\nSQLite keeps it on disk; Postgres shares the " +
+                            "app's own database; memory is fastest and loses everything on a " +
+                            "restart. Which should the cache use?",
+                        "Cache",
+                        listOf(
+                            Dialog.Option(
+                                "SQLite",
+                                "One file beside the app, kept across restarts, no server to run",
+                                preview = "cache/\n└── entries.sqlite   (one table, keyed by URL)",
+                            ),
+                            Dialog.Option(
+                                "Postgres",
+                                "The app's own database: one more table, shared by every instance",
+                            ),
+                            Dialog.Option("Memory", "Fastest, and empty after every restart"),
+                        ),
+                        custom = true,
+                    )
+                ),
+        )
+
+    /** A question longer than the card: its text scrolls, its choices stay below. */
+    @Test fun long_question_light() = card(long)
+
     @Test fun question_light() = card(question)
 
     @Test @Config(qualifiers = "+night") fun question_dark() = card(question)

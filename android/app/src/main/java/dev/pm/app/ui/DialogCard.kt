@@ -1,13 +1,16 @@
 package dev.pm.app.ui
 
+import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -21,10 +24,11 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import dev.pm.app.R
@@ -32,9 +36,10 @@ import dev.pm.app.model.Dialog
 
 /**
  * The agent's open dialogs, answered here in the composer's place, one at a time with a way to step
- * between them: each a title, its target in a line, and its choices in a row. Review opens it
- * whole, over the screen. A lone question's options answer it on a tap; a form of several waits for
- * Submit. A choice that takes a message asks for it first.
+ * between them: each a title, then what it asks whole — the question form, the command, the plan —
+ * scrolling within part of the screen, with its choices in a row below that stay in reach. Review
+ * opens it over the whole screen. A lone question's options answer it on a tap; a form of several
+ * waits for its main choice. A choice that takes a message asks for it first.
  */
 @Composable
 internal fun DialogCard(
@@ -79,49 +84,68 @@ internal fun DialogCard(
     val pendingOn = answering?.takeIf { it.id == dialog.id }?.let { form.tapped }
 
     Surface(modifier.fillMaxWidth(), tonalElevation = 2.dp) {
-        Column(Modifier.padding(start = Spacing.m, end = Spacing.xs, bottom = Spacing.s)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    dialog.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                if (dialogs.size > 1) {
-                    Stepper(index, dialogs.size) { at = dialogs[it].id }
-                }
-                AgentActions(answering == null, interrupting, interrupt, openTerminal)
-            }
-            Column(Modifier.padding(end = Spacing.s)) {
-                Target(dialog)
-                if (said != null) {
+        BoxWithConstraints {
+            // The card's own room is what the screen leaves; the text takes part of it, so the
+            // conversation above stays in sight, and never the room the title and choices need.
+            val room = if (constraints.hasBoundedHeight) maxHeight * TEXT_SHARE else Dp.Unspecified
+            Column(
+                Modifier.heightIn(max = maxHeight)
+                    .padding(start = Spacing.m, end = Spacing.xs, bottom = Spacing.s)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        said,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.labelMedium,
+                        dialog.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f),
                     )
+                    if (dialogs.size > 1) {
+                        Stepper(index, dialogs.size) { at = dialogs[it].id }
+                    }
+                    AgentActions(answering == null, interrupting, interrupt, openTerminal)
                 }
-                val messaging = form.messaging
-                when {
-                    messaging != null ->
-                        MessageField(
-                            form,
-                            dialog.choices.find { it.id == messaging }?.label ?: messaging,
-                            pending = pendingOn == messaging,
-                            enabled = !busy,
-                            send = { sendMessage(messaging) },
+                Column(Modifier.weight(1f, fill = false).padding(end = Spacing.s)) {
+                    val scroll =
+                        rememberSaveable(dialog.id, saver = ScrollState.Saver) { ScrollState(0) }
+                    Column(
+                        Modifier.weight(1f, fill = false)
+                            .heightIn(max = room)
+                            .verticalScroll(scroll)
+                            .testTag(DIALOG_TEXT),
+                        verticalArrangement = Arrangement.spacedBy(Spacing.s),
+                    ) {
+                        Asked(dialog, form, pendingOn, busy, answer)
+                    }
+                    if (scroll.maxValue > 0) HorizontalDivider()
+                    if (said != null) {
+                        Text(
+                            said,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.labelMedium,
                         )
-                    isLoneChoice(dialog) ->
-                        LoneQuestion(dialog, form, pendingOn, busy, answer) {
-                            reviewing = dialog.id
-                        }
-                    else ->
-                        ChoiceRow(
-                            dialog,
-                            pendingOn,
-                            busy,
-                            review = { reviewing = dialog.id },
-                            onChoice = send,
-                        )
+                    }
+                    val messaging = form.messaging
+                    when {
+                        messaging != null ->
+                            MessageField(
+                                form,
+                                dialog.choices.find { it.id == messaging }?.label ?: messaging,
+                                pending = pendingOn == messaging,
+                                enabled = !busy,
+                                send = { sendMessage(messaging) },
+                            )
+                        isLoneChoice(dialog) ->
+                            LoneActions(dialog, form, pendingOn, busy, answer) {
+                                reviewing = dialog.id
+                            }
+                        else ->
+                            ChoiceRow(
+                                dialog,
+                                pendingOn,
+                                busy,
+                                review = { reviewing = dialog.id },
+                                onChoice = send,
+                            )
+                    }
                 }
             }
         }
@@ -139,19 +163,66 @@ internal fun DialogCard(
     }
 }
 
-/** What the dialog is about, in a line: the command or file, the plan's title, the question. */
+/** The share of the card's room its text may fill before it scrolls. */
+private const val TEXT_SHARE = 0.6f
+
+/** The tag of the card's scrolling text, for tests to scroll it. */
+internal const val DIALOG_TEXT = "dialog-text"
+
+/**
+ * What the dialog asks, whole: a lone question with its options to tap, a form's questions to fill
+ * in, the plan, or the command or file a tool would act on.
+ */
 @Composable
-private fun Target(dialog: Dialog) {
-    val text = dialog.target ?: return
-    if (dialog.kind == "permission") {
-        Text(text, style = terminalStyle(13.sp), maxLines = 1, overflow = targetCut(text))
-    } else {
-        Text(
-            text,
-            style = MaterialTheme.typography.bodyMedium,
-            maxLines = if (isLoneChoice(dialog)) 3 else 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+private fun Asked(
+    dialog: Dialog,
+    form: DialogForm,
+    pendingOn: String?,
+    busy: Boolean,
+    answer: (Dialog, String, Map<String, List<String>>, String?) -> Unit,
+) {
+    when {
+        isLoneChoice(dialog) -> {
+            val question = dialog.questions.single()
+            Selectable { QuestionText(question, compact = true) }
+            question.options.forEach { option ->
+                val mine = pendingOn == option.label
+                LoneOption(
+                    option,
+                    onClick = {
+                        form.tapped = option.label
+                        answer(
+                            dialog,
+                            Dialog.ANSWER,
+                            mapOf(question.question to listOf(option.label)),
+                            null,
+                        )
+                    },
+                    pending = mine,
+                    enabled = mine || !busy,
+                )
+            }
+        }
+        dialog.kind == "question" && dialog.questions.isNotEmpty() ->
+            dialog.questions.forEach { q ->
+                QuestionView(
+                    q,
+                    form.picked[q.question].orEmpty(),
+                    form.typed[q.question].orEmpty(),
+                    pick = { form.picked[q.question] = it },
+                    type = { form.typed[q.question] = it },
+                    compact = true,
+                )
+            }
+        dialog.kind == "plan" && !dialog.plan.isNullOrBlank() ->
+            Selectable { PmMarkdown(dialog.plan, text = MaterialTheme.typography.bodyMedium) }
+        else ->
+            dialog.target?.let {
+                val style =
+                    if (dialog.kind == "permission") terminalStyle(13.sp)
+                    else MaterialTheme.typography.bodyMedium
+                Selectable { Text(it, style = style) }
+            }
     }
     dialog.subagent?.let {
         Text(
@@ -180,12 +251,9 @@ private fun Stepper(index: Int, count: Int, go: (Int) -> Unit) {
     }
 }
 
-/**
- * A lone single-select question: a tap on an option answers it. Review shows the options'
- * descriptions, and takes the user's own words where the question does.
- */
+/** A lone question's own words through its review, and its declining choice. */
 @Composable
-private fun LoneQuestion(
+private fun LoneActions(
     dialog: Dialog,
     form: DialogForm,
     pendingOn: String?,
@@ -194,45 +262,20 @@ private fun LoneQuestion(
     review: () -> Unit,
 ) {
     val question = dialog.questions.single()
-    Column {
-        FlowRow(
-            Modifier.fillMaxWidth().padding(top = Spacing.s),
-            horizontalArrangement = Arrangement.spacedBy(Spacing.s),
-        ) {
-            question.options.forEach { option ->
-                val mine = pendingOn == option.label
-                PendingButton(
-                    option.label,
-                    onClick = {
-                        form.tapped = option.label
-                        answer(
-                            dialog,
-                            Dialog.ANSWER,
-                            mapOf(question.question to listOf(option.label)),
-                            null,
-                        )
-                    },
-                    pending = mine,
-                    enabled = mine || !busy,
-                    emphasis = Emphasis.Outlined,
-                )
-            }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = review) { Text(if (question.custom) "Other answer" else "Review") }
-            Spacer(Modifier.weight(1f))
-            dialog.groups?.negative?.let { decline ->
-                PendingButton(
-                    shortLabel(decline.label),
-                    onClick = {
-                        form.tapped = decline.id
-                        answer(dialog, decline.id, emptyMap(), null)
-                    },
-                    pending = pendingOn == decline.id,
-                    enabled = pendingOn == decline.id || !busy,
-                    emphasis = Emphasis.Text,
-                )
-            }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = review) { Text(if (question.custom) "Other answer" else "Review") }
+        Spacer(Modifier.weight(1f))
+        dialog.groups?.negative?.let { decline ->
+            PendingButton(
+                shortLabel(decline.label),
+                onClick = {
+                    form.tapped = decline.id
+                    answer(dialog, decline.id, emptyMap(), null)
+                },
+                pending = pendingOn == decline.id,
+                enabled = pendingOn == decline.id || !busy,
+                emphasis = Emphasis.Text,
+            )
         }
     }
 }
