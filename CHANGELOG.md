@@ -6,6 +6,14 @@ notes.
 
 ## Unreleased
 
+- The bundled workflows move from `~/.config/pm/workflows/` to
+`~/.local/share/pm/workflows/` (`$XDG_DATA_HOME/pm`), out of the global
+registry repo. `pm update` deletes the old copies pm wrote; one you edited
+is kept, no longer updated (pm reads the bundled one first), and named by
+`pm update` and `pm doctor` until you move the edits to a project's
+`.pm/workflows/` and delete it. Your own global workflows stay in
+`~/.config/pm/workflows/`.
+
 ## 0.7.1 — 2026-10-17
 
 - `pm update` replaces `pm self-update` and `pm upgrade`: it installs the

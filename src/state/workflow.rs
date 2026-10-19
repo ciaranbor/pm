@@ -1,7 +1,11 @@
 //! Workflow definitions live in two tiers, resolved project-first by name:
 //! `<project>/.pm/workflows/<name>/` (the project's customs) and the global
-//! `<pm config dir>/workflows/<name>/` (where the bundled ones install, plus
-//! any global customs under non-bundled names).
+//! tier ([`GlobalTier`]), which is two dirs read in order: the bundled
+//! workflows under the pm data dir, rewritten by every `pm update`, then
+//! global customs under the pm config dir, which the registry repo syncs.
+//! A bundled name resolves from the config dir only while the data dir
+//! lacks it (a binary whose `pm update` hasn't run, or a disabled bundled
+//! workflow); `pm doctor` reports such leftovers.
 //!
 //! Each workflow directory contains:
 //! - `config.toml` — machine-readable: description, agents, brief_agents list
@@ -59,7 +63,7 @@ impl WorkflowDef {
     /// Load a workflow's `config.toml` from whichever tier resolves it.
     /// Errors if neither has it or the file is malformed.
     pub fn load(project_root: &Path, name: &str) -> Result<Self> {
-        Self::load_with_global(Some(project_root), name, &global_dir()?)
+        Self::load_with_global(Some(project_root), name, &GlobalTier::resolve()?)
     }
 
     /// [`load`](Self::load) against an explicit global tier; `project_root`
@@ -67,9 +71,9 @@ impl WorkflowDef {
     pub fn load_with_global(
         project_root: Option<&Path>,
         name: &str,
-        global_dir: &Path,
+        global: &GlobalTier,
     ) -> Result<Self> {
-        let (dir, _) = resolve_dir(project_root, name, global_dir)
+        let (dir, _) = resolve_dir(project_root, name, global)
             .ok_or_else(|| PmError::WorkflowNotFound(name.to_string()))?;
         Self::load_from_dir(&dir)
     }
@@ -179,18 +183,47 @@ fn one_line(e: &toml::de::Error, content: &str) -> String {
     format!("{message} (line {line}, column {column})")
 }
 
-/// The global workflow tier for this process.
-pub fn global_dir() -> Result<PathBuf> {
-    paths::global_workflows_dir()
+/// The global workflow tier's dirs, in lookup order.
+#[derive(Debug, Clone)]
+pub struct GlobalTier {
+    pub bundled: PathBuf,
+    pub customs: PathBuf,
+}
+
+impl GlobalTier {
+    /// The tier for this process.
+    pub fn resolve() -> Result<Self> {
+        let dirs = paths::global_dirs()?;
+        Ok(Self::in_dirs(&dirs.data, &dirs.config))
+    }
+
+    /// The tier under explicit pm data and config dirs.
+    pub fn in_dirs(data_dir: &Path, config_dir: &Path) -> Self {
+        Self {
+            bundled: paths::bundled_workflows_dir_in(data_dir),
+            customs: paths::custom_workflows_dir_in(config_dir),
+        }
+    }
+
+    /// The tier under a test home's default XDG layout.
+    #[cfg(test)]
+    pub fn under(home: &Path) -> Self {
+        let dirs = paths::Dirs::resolve(home, |_| None);
+        Self::in_dirs(&dirs.data, &dirs.config)
+    }
+
+    fn dirs(&self) -> [&Path; 2] {
+        [&self.bundled, &self.customs]
+    }
 }
 
 /// The directory holding workflow `name` and the tier it came from: the
-/// project's `.pm/workflows/<name>/` when that has a `config.toml`, else
-/// `<global_dir>/<name>/`. `None` when neither does.
+/// project's `.pm/workflows/<name>/` when that has a `config.toml`, else the
+/// first of `global`'s dirs that does. `None` when none does.
 pub fn resolve_dir(
     project_root: Option<&Path>,
     name: &str,
-    global_dir: &Path,
+    global: &GlobalTier,
 ) -> Option<(PathBuf, Tier)> {
     if let Some(root) = project_root {
         let dir = paths::workflows_dir(root).join(name);
@@ -198,23 +231,25 @@ pub fn resolve_dir(
             return Some((dir, Tier::Project));
         }
     }
-    let dir = global_dir.join(name);
-    dir.join("config.toml")
-        .is_file()
-        .then_some((dir, Tier::Global))
+    global
+        .dirs()
+        .into_iter()
+        .map(|d| d.join(name))
+        .find(|dir| dir.join("config.toml").is_file())
+        .map(|dir| (dir, Tier::Global))
 }
 
 /// Path to a workflow's `workflow.md` (the prose dumped by `pm workflow
 /// show`) in whichever tier resolves it; `None` if the workflow isn't
 /// installed. The file itself may still be missing.
 pub fn workflow_md_path(project_root: &Path, name: &str) -> Option<PathBuf> {
-    let global = global_dir().ok()?;
+    let global = GlobalTier::resolve().ok()?;
     resolve_dir(Some(project_root), name, &global).map(|(dir, _)| dir.join("workflow.md"))
 }
 
 /// Whether a workflow is installed in either tier.
 pub fn exists(project_root: &Path, name: &str) -> bool {
-    global_dir()
+    GlobalTier::resolve()
         .ok()
         .is_some_and(|g| resolve_dir(Some(project_root), name, &g).is_some())
 }
@@ -240,15 +275,15 @@ pub struct InstalledWorkflows {
 /// global tier only. Parse failures are returned alongside so the caller
 /// can warn about broken `config.toml` files.
 pub fn list_installed_with_errors(project_root: Option<&Path>) -> Result<InstalledWorkflows> {
-    list_installed_in(project_root, &global_dir()?)
+    list_installed_in(project_root, &GlobalTier::resolve()?)
 }
 
 pub fn list_installed_in(
     project_root: Option<&Path>,
-    global_dir: &Path,
+    global: &GlobalTier,
 ) -> Result<InstalledWorkflows> {
     let mut names: Vec<String> = Vec::new();
-    let mut dirs = vec![global_dir.to_path_buf()];
+    let mut dirs: Vec<PathBuf> = global.dirs().map(Path::to_path_buf).into();
     if let Some(root) = project_root {
         dirs.push(paths::workflows_dir(root));
     }
@@ -272,7 +307,7 @@ pub fn list_installed_in(
     let mut workflows = Vec::new();
     let mut errors = Vec::new();
     for name in names {
-        let Some((dir, tier)) = resolve_dir(project_root, &name, global_dir) else {
+        let Some((dir, tier)) = resolve_dir(project_root, &name, global) else {
             // A directory with no `config.toml` in the tier that would win.
             errors.push((name, "config.toml missing".to_string()));
             continue;
@@ -659,79 +694,95 @@ auto_spawn = ["implementer"]
         );
     }
 
-    fn write_global_workflow(global_dir: &Path, name: &str, body: &str) {
-        let dir = global_dir.join(name);
+    fn write_global_workflow(dir: &Path, name: &str, body: &str) {
+        let dir = dir.join(name);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.toml"), body).unwrap();
         std::fs::write(dir.join("workflow.md"), "# global md").unwrap();
     }
 
     #[test]
-    fn resolve_prefers_project_tier_and_falls_back_to_global() {
+    fn resolve_prefers_project_then_bundled_then_global_customs() {
         let project = tempdir().unwrap();
-        let global = tempdir().unwrap();
-        write_global_workflow(global.path(), "solo", "description = \"bundled\"\n");
-        write_global_workflow(global.path(), "shared", "description = \"global custom\"\n");
+        let home = tempdir().unwrap();
+        let global = GlobalTier::under(home.path());
+        write_global_workflow(&global.bundled, "solo", "description = \"bundled\"\n");
+        write_global_workflow(&global.customs, "solo", "description = \"leftover\"\n");
+        write_global_workflow(
+            &global.customs,
+            "shared",
+            "description = \"global custom\"\n",
+        );
+        write_global_workflow(&global.customs, "pr-review", "description = \"old copy\"\n");
         write_workflow(
             project.path(),
             "solo",
             "description = \"project override\"\n",
         );
 
-        let (dir, tier) = resolve_dir(Some(project.path()), "solo", global.path()).unwrap();
+        let (dir, tier) = resolve_dir(Some(project.path()), "solo", &global).unwrap();
         assert_eq!(tier, Tier::Project);
         assert_eq!(dir, paths::workflows_dir(project.path()).join("solo"));
-        let (dir, tier) = resolve_dir(Some(project.path()), "shared", global.path()).unwrap();
+        let (dir, tier) = resolve_dir(Some(project.path()), "shared", &global).unwrap();
         assert_eq!(tier, Tier::Global);
-        assert_eq!(dir, global.path().join("shared"));
-        assert!(resolve_dir(Some(project.path()), "ghost", global.path()).is_none());
-        // No project: the global tier alone.
+        assert_eq!(dir, global.customs.join("shared"));
+        assert!(resolve_dir(Some(project.path()), "ghost", &global).is_none());
+        // No project: the global tier alone, the bundled dir over the customs.
         assert_eq!(
-            resolve_dir(None, "solo", global.path()).unwrap().1,
-            Tier::Global
+            resolve_dir(None, "solo", &global).unwrap(),
+            (global.bundled.join("solo"), Tier::Global)
+        );
+        // A bundled name the data dir lacks still resolves from the config dir.
+        assert_eq!(
+            resolve_dir(None, "pr-review", &global).unwrap().0,
+            global.customs.join("pr-review")
         );
 
-        let def =
-            WorkflowDef::load_with_global(Some(project.path()), "solo", global.path()).unwrap();
+        let def = WorkflowDef::load_with_global(Some(project.path()), "solo", &global).unwrap();
         assert_eq!(def.description, "project override");
-        let def = WorkflowDef::load_with_global(None, "solo", global.path()).unwrap();
+        let def = WorkflowDef::load_with_global(None, "solo", &global).unwrap();
         assert_eq!(def.description, "bundled");
-        let err = WorkflowDef::load_with_global(Some(project.path()), "ghost", global.path())
-            .unwrap_err();
+        let err =
+            WorkflowDef::load_with_global(Some(project.path()), "ghost", &global).unwrap_err();
         assert!(matches!(err, PmError::WorkflowNotFound(_)));
 
-        let list = list_installed_in(Some(project.path()), global.path()).unwrap();
-        let rows: Vec<(&str, Tier)> = list
+        let list = list_installed_in(Some(project.path()), &global).unwrap();
+        let rows: Vec<(&str, Tier, &str)> = list
             .workflows
             .iter()
-            .map(|w| (w.name.as_str(), w.tier))
+            .map(|w| (w.name.as_str(), w.tier, w.def.description.as_str()))
             .collect();
         assert_eq!(
             rows,
-            vec![("shared", Tier::Global), ("solo", Tier::Project)]
+            vec![
+                ("pr-review", Tier::Global, "old copy"),
+                ("shared", Tier::Global, "global custom"),
+                ("solo", Tier::Project, "project override")
+            ]
         );
         assert!(list.errors.is_empty());
-        let global_only = list_installed_in(None, global.path()).unwrap();
+        let global_only = list_installed_in(None, &global).unwrap();
         assert!(global_only.workflows.iter().all(|w| w.tier == Tier::Global));
+        assert_eq!(global_only.workflows.len(), 3);
     }
 
     #[test]
     fn list_installed_empty_when_neither_tier_exists() {
         let dir = tempdir().unwrap();
-        let global = tempdir().unwrap();
-        let list = list_installed_in(Some(dir.path()), &global.path().join("none")).unwrap();
+        let home = tempdir().unwrap();
+        let list = list_installed_in(Some(dir.path()), &GlobalTier::under(home.path())).unwrap();
         assert!(list.workflows.is_empty() && list.errors.is_empty());
     }
 
     #[test]
     fn list_installed_reports_unparseable_workflows_as_errors() {
         let dir = tempdir().unwrap();
-        let global = tempdir().unwrap();
+        let home = tempdir().unwrap();
         let workflows_dir = paths::workflows_dir(dir.path());
         std::fs::create_dir_all(workflows_dir.join("bad")).unwrap();
         std::fs::write(workflows_dir.join("bad").join("config.toml"), "not toml{{{").unwrap();
         write_workflow(dir.path(), "good", "description = \"ok\"\n");
-        let list = list_installed_in(Some(dir.path()), global.path()).unwrap();
+        let list = list_installed_in(Some(dir.path()), &GlobalTier::under(home.path())).unwrap();
         let names: Vec<_> = list.workflows.iter().map(|w| w.name.as_str()).collect();
         assert_eq!(names, vec!["good"]);
         assert_eq!(list.errors.len(), 1);

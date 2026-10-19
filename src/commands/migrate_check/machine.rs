@@ -166,6 +166,7 @@ pub(super) fn findings(m: &Machine<'_>) -> Result<Vec<Finding>> {
     let customs = global_customs_in(&GlobalStore {
         home: m.home.to_path_buf(),
         config_dir: m.config_dir.to_path_buf(),
+        data_dir: crate::state::paths::dirs_under(m.home).data,
     });
     if !customs.is_empty() {
         out.push(Finding::manual(

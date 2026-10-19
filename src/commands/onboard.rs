@@ -61,7 +61,7 @@ Report to the user in your own session.\n";
 
 /// Where home lives under `dirs`.
 pub fn home_root(dirs: &Dirs) -> PathBuf {
-    dirs.data_home.join("pm").join(HOME_NAME)
+    dirs.data.join(HOME_NAME)
 }
 
 /// Whether the project `name` at `root` is this machine's home: the one the

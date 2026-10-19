@@ -603,7 +603,7 @@ install script runs too:
 
 | Tier | Skills / agents / baseline | Workflows |
 |------|----------------------------|-----------|
-| Global (pm's, plus your machine-wide customs) | `~/.agents/{skills,agents}`, `~/.agents/pm-baseline.md` | `<pm config dir>/workflows/` |
+| Global (pm's, plus your machine-wide customs) | `~/.agents/{skills,agents}`, `~/.agents/pm-baseline.md` | pm's in `<pm data dir>/workflows/`, yours in `<pm config dir>/workflows/` |
 | Project (your customs only) | `main/.agents/{skills,agents}` | `<project>/.pm/workflows/` |
 
 Everything resolves **project tier first, then global**, by name, so a
@@ -618,7 +618,7 @@ pm update --local               # projects it for the harness
 pm harness pull <feature>       # existing features don't get it otherwise
 ```
 
-For a workflow, copy `<pm config dir>/workflows/<name>/` into
+For a workflow, copy `<pm data dir>/workflows/<name>/` into
 `<project>/.pm/workflows/<name>/` and edit its `config.toml` (the team)
 and `workflow.md` (the routing). `pm workflow list` shows what is
 installed and where from; `pm harness agents list` and `pm harness skills
@@ -845,7 +845,8 @@ Linux alike:
 
 | Dir | Default | Holds |
 |---|---|---|
-| config, `$XDG_CONFIG_HOME/pm` | `~/.config/pm` | `config.toml`, `notices.md`, global workflows, the project registry; what `pm state --global` syncs |
+| config, `$XDG_CONFIG_HOME/pm` | `~/.config/pm` | `config.toml`, `notices.md`, your global workflows, the project registry; what `pm state --global` syncs |
+| data, `$XDG_DATA_HOME/pm` | `~/.local/share/pm` | the bundled workflows, which `pm update` rewrites; home's project |
 | state, `$XDG_STATE_HOME/pm` | `~/.local/state/pm` | `pm serve`'s paired devices, push key and log; registry entries a pull set aside |
 | cache, `$XDG_CACHE_HOME/pm` | `~/.cache/pm` | harness probe results, safe to delete |
 | runtime, `$XDG_RUNTIME_DIR/pm` | `<state>/run` | locks and `pm serve`'s wake-up |

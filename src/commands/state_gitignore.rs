@@ -1,186 +1,35 @@
-//! The global registry repo's `.gitignore`: what pm writes into the config
-//! dir that must stay out of it.
+//! The global registry repo's `.gitignore`.
 //!
-//! The pm config dir can be git-backed (`pm state init --global`) so the
-//! project registry, global config, and global *custom* workflows sync
-//! between machines. The bundled workflows share the dir but are not state
-//! to sync: `pm update` rewrites them every release, and committing that
-//! churn would make every machine's registry dirty after each upgrade. So
-//! `.gitignore` carries a marker-delimited block naming them, regenerated
-//! wherever bundled workflows are written, from the bundle — never a
-//! hand-kept list, which would go stale. Because the file is tracked, one
-//! machine's regeneration reaches the others through the repo. Everything
-//! outside the block is the user's.
-//!
-//! Copies an earlier release committed are untracked in the same pass
-//! (`git rm --cached`), staged but not committed: the next `pm state push
-//! --global` commits the deletion, and a machine that pulls it loses the
-//! files from disk until pm writes them again (`pm update` reinstalls the
-//! workflows).
+//! `pm state init --global` creates it with the machine-specific ephemera
+//! the registry may accumulate. Releases that installed the bundled
+//! workflows into the config dir also wrote a block naming them, and pm
+//! leaves that block in place: a machine sharing the registry may still run
+//! such a release, and without the block its next push would commit its
+//! bundled copies to every machine.
 
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::fs_utils::write_atomic;
-use crate::git;
-use crate::state::paths;
 
-use super::skills::bundled_workflow_names;
-
-/// Lines every registry `.gitignore` starts from: the registry may
-/// accumulate machine-specific ephemera.
+/// The `.gitignore` a new registry repo starts from.
 const BASE: &str = "\
 # Ephemeral / machine-specific state
 *.lock
 *.pid
 ";
 
-const BLOCK_START: &str = "# >>> managed by pm — regenerated, edit outside this block >>>";
-const BLOCK_END: &str = "# <<< managed by pm <<<";
-
 fn gitignore_path(config_dir: &Path) -> PathBuf {
     config_dir.join(".gitignore")
 }
 
-/// Every config-dir-relative path the block ignores.
-fn managed_paths() -> Vec<String> {
-    bundled_workflow_names()
-        .into_iter()
-        .map(|name| format!("{}/{name}", paths::WORKFLOWS_DIR_NAME))
-        .collect()
-}
-
-fn block() -> String {
-    let mut out = format!("{BLOCK_START}\n");
-    for rel in managed_paths() {
-        out.push_str(&format!("/{rel}/\n"));
+/// Write the registry `.gitignore` when absent.
+pub fn write_global_gitignore(config_dir: &Path) -> Result<()> {
+    let path = gitignore_path(config_dir);
+    if !path.exists() {
+        write_atomic(&path, BASE.as_bytes())?;
     }
-    out.push_str(BLOCK_END);
-    out.push('\n');
-    out
-}
-
-/// `existing` with its managed block replaced (or appended when absent);
-/// every line outside the block is kept. A block is a `BLOCK_START` whose
-/// following lines are all `/…/` patterns up to a `BLOCK_END`; a start
-/// marker without one is a user line and stays.
-fn render(existing: Option<&str>) -> String {
-    let lines: Vec<&str> = existing.unwrap_or(BASE).lines().collect();
-    let block = block();
-    let mut out = String::new();
-    match find_block(&lines) {
-        Some((start, end)) => {
-            for l in &lines[..start] {
-                out.push_str(l);
-                out.push('\n');
-            }
-            out.push_str(&block);
-            for l in &lines[end + 1..] {
-                out.push_str(l);
-                out.push('\n');
-            }
-        }
-        None => {
-            for l in &lines {
-                out.push_str(l);
-                out.push('\n');
-            }
-            if !out.is_empty() && !out.ends_with("\n\n") {
-                out.push('\n');
-            }
-            out.push_str(&block);
-        }
-    }
-    out
-}
-
-/// Indices of the first well-formed block's start and end markers: a start
-/// marker followed by pattern lines up to its end marker.
-fn find_block(lines: &[&str]) -> Option<(usize, usize)> {
-    for (start, line) in lines.iter().enumerate() {
-        if *line != BLOCK_START {
-            continue;
-        }
-        let body = lines[start + 1..]
-            .iter()
-            .take_while(|l| l.starts_with('/') && l.ends_with('/'))
-            .count();
-        if lines.get(start + 1 + body) == Some(&BLOCK_END) {
-            return Some((start, start + 1 + body));
-        }
-    }
-    None
-}
-
-fn read_existing(config_dir: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(gitignore_path(config_dir)) {
-        Ok(s) => Ok(Some(s)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e.into()),
-    }
-}
-
-/// Write the registry `.gitignore` with the current managed block, creating
-/// it from the base ephemera list when absent. Returns whether the file
-/// changed (would change, in `dry_run`, which writes nothing).
-pub fn write_global_gitignore(config_dir: &Path, dry_run: bool) -> Result<bool> {
-    let existing = read_existing(config_dir)?;
-    let rendered = render(existing.as_deref());
-    if existing.as_deref() == Some(rendered.as_str()) {
-        return Ok(false);
-    }
-    if !dry_run {
-        write_atomic(&gitignore_path(config_dir), rendered.as_bytes())?;
-    }
-    Ok(true)
-}
-
-/// Untrack every managed path the registry repo has committed, leaving the
-/// files on disk and the deletion staged. Returns the paths affected;
-/// nothing happens (and nothing is reported) without a repo.
-pub fn untrack_managed(config_dir: &Path, dry_run: bool) -> Result<Vec<String>> {
-    if !git::is_git_repo(config_dir) {
-        return Ok(Vec::new());
-    }
-    let mut untracked = Vec::new();
-    for rel in managed_paths() {
-        if git::ls_files(config_dir, &rel)?.is_empty() {
-            continue;
-        }
-        if !dry_run {
-            git::rm_cached(config_dir, &rel)?;
-        }
-        untracked.push(rel);
-    }
-    Ok(untracked)
-}
-
-/// Bring the registry repo's view of the managed paths up to date:
-/// regenerate the ignore block and untrack committed copies. One
-/// user-facing line per action taken (`Would …` in `dry_run`, which writes
-/// nothing); nothing to do yields no lines.
-pub fn sync_global_registry_ignore(config_dir: &Path, dry_run: bool) -> Result<Vec<String>> {
-    let mut lines = Vec::new();
-    if write_global_gitignore(config_dir, dry_run)? {
-        let verb = if dry_run { "Would update" } else { "Updated" };
-        lines.push(format!(
-            "{verb} pm's ignore block in {}",
-            gitignore_path(config_dir).display()
-        ));
-    }
-    let untracked = untrack_managed(config_dir, dry_run)?;
-    if !untracked.is_empty() {
-        let list = untracked.join(", ");
-        lines.push(if dry_run {
-            format!("Would untrack {list} from the global registry repo")
-        } else {
-            format!(
-                "Untracked {list} from the global registry repo \
-                 (commit with `pm state push --global`)"
-            )
-        });
-    }
-    Ok(lines)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -188,148 +37,14 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    fn ignored(config_dir: &Path, rel: &str) -> bool {
-        std::process::Command::new("git")
-            .args([
-                "-C",
-                &config_dir.to_string_lossy(),
-                "check-ignore",
-                "-q",
-                rel,
-            ])
-            .status()
-            .unwrap()
-            .success()
-    }
-
-    fn marker_count(s: &str) -> usize {
-        s.lines().filter(|l| *l == BLOCK_START).count()
-    }
-
     #[test]
-    fn write_creates_from_base_and_is_idempotent() {
+    fn write_creates_the_base_once_and_keeps_user_edits() {
         let dir = tempdir().unwrap();
-        assert!(write_global_gitignore(dir.path(), false).unwrap());
-        let first = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert!(first.starts_with(BASE));
-
-        assert!(!write_global_gitignore(dir.path(), false).unwrap());
-        let second = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert_eq!(first, second);
-
-        git::init_repo(dir.path()).unwrap();
-        for name in bundled_workflow_names() {
-            assert!(ignored(
-                dir.path(),
-                &format!("workflows/{name}/config.toml")
-            ));
-        }
-        assert!(!ignored(dir.path(), "workflows/mine/config.toml"));
-        assert!(ignored(dir.path(), "foo.lock"));
-        assert!(!ignored(dir.path(), "config.toml"));
-        assert!(!ignored(dir.path(), "projects/p.toml"));
-    }
-
-    #[test]
-    fn sync_untracks_committed_bundled_workflows_and_keeps_state() {
-        let dir = tempdir().unwrap();
-        git::init_repo(dir.path()).unwrap();
-        let bundled = bundled_workflow_names().into_iter().next().unwrap();
-        let rel = format!("workflows/{bundled}");
-        let workflow = dir.path().join(&rel).join("workflow.md");
-        std::fs::create_dir_all(workflow.parent().unwrap()).unwrap();
-        std::fs::write(&workflow, "").unwrap();
-        std::fs::write(dir.path().join("config.toml"), "").unwrap();
-        git::add_all(dir.path()).unwrap();
-        git::commit(dir.path(), "old release").unwrap();
-
-        let lines = sync_global_registry_ignore(dir.path(), false).unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.starts_with(&format!("Untracked {rel} from"))),
-            "{lines:?}"
-        );
-        assert!(workflow.is_file());
-        assert!(git::ls_files(dir.path(), &rel).unwrap().is_empty());
-        assert!(!git::ls_files(dir.path(), "config.toml").unwrap().is_empty());
-    }
-
-    #[test]
-    fn write_keeps_user_lines_and_replaces_a_stale_block() {
-        let dir = tempdir().unwrap();
-        let stale =
-            format!("scratch/\n\n{BLOCK_START}\n/workflows/old-name/\n{BLOCK_END}\ntrailing\n");
-        std::fs::write(dir.path().join(".gitignore"), &stale).unwrap();
-
-        assert!(write_global_gitignore(dir.path(), false).unwrap());
-        let out = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert_eq!(marker_count(&out), 1);
-        assert!(!out.contains("old-name"));
-        assert!(out.starts_with("scratch/\n"));
-        assert!(out.ends_with("trailing\n"));
-
-        git::init_repo(dir.path()).unwrap();
-        assert!(ignored(dir.path(), "scratch/x"));
-        assert!(ignored(dir.path(), "trailing"));
-        assert!(!ignored(dir.path(), "workflows/old-name/config.toml"));
-        for name in bundled_workflow_names() {
-            assert!(ignored(
-                dir.path(),
-                &format!("workflows/{name}/config.toml")
-            ));
-        }
-    }
-
-    #[test]
-    fn write_keeps_lines_after_an_unclosed_block() {
-        let dir = tempdir().unwrap();
-        let mangled = format!("{BLOCK_START}\n/workflows/old-name/\nuser-line\n");
-        std::fs::write(dir.path().join(".gitignore"), &mangled).unwrap();
-
-        assert!(write_global_gitignore(dir.path(), false).unwrap());
-        let out = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert!(out.starts_with(&mangled), "{out}");
-        assert_eq!(out.lines().filter(|l| *l == BLOCK_END).count(), 1);
-
-        // The stray start marker is now a user line: stable across rewrites.
-        assert!(!write_global_gitignore(dir.path(), false).unwrap());
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
-            out
-        );
-    }
-
-    #[test]
-    fn write_appends_block_to_a_file_without_one() {
-        let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join(".gitignore"), "mine.txt").unwrap();
-        assert!(write_global_gitignore(dir.path(), false).unwrap());
-        let out = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
-        assert_eq!(marker_count(&out), 1);
-        assert!(out.starts_with("mine.txt\n"));
-        assert!(!write_global_gitignore(dir.path(), false).unwrap());
-    }
-
-    #[test]
-    fn sync_without_a_repo_only_writes_the_gitignore() {
-        let dir = tempdir().unwrap();
-        let lines = sync_global_registry_ignore(dir.path(), false).unwrap();
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(lines[0].starts_with("Updated pm's ignore block in "));
-        assert!(
-            sync_global_registry_ignore(dir.path(), false)
-                .unwrap()
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn dry_run_reports_without_writing() {
-        let dir = tempdir().unwrap();
-        let lines = sync_global_registry_ignore(dir.path(), true).unwrap();
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(lines[0].starts_with("Would update"));
-        assert!(!dir.path().join(".gitignore").exists());
+        write_global_gitignore(dir.path()).unwrap();
+        let file = dir.path().join(".gitignore");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), BASE);
+        std::fs::write(&file, "mine\n").unwrap();
+        write_global_gitignore(dir.path()).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "mine\n");
     }
 }

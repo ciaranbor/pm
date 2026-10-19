@@ -115,7 +115,7 @@ pub struct ListOutput {
 pub fn list_rows(project_root: Option<&Path>) -> Result<ListOutput> {
     list_rows_in(
         project_root,
-        &workflow::global_dir()?,
+        &workflow::GlobalTier::resolve()?,
         paths::home_dir().ok().as_deref(),
         &Disabled::load(),
     )
@@ -124,11 +124,11 @@ pub fn list_rows(project_root: Option<&Path>) -> Result<ListOutput> {
 /// [`list_rows`] against explicit tiers.
 pub fn list_rows_in(
     project_root: Option<&Path>,
-    global_dir: &Path,
+    global: &workflow::GlobalTier,
     home: Option<&Path>,
     disabled: &Disabled,
 ) -> Result<ListOutput> {
-    let installed = workflow::list_installed_in(project_root, global_dir)?;
+    let installed = workflow::list_installed_in(project_root, global)?;
     let resolves = |agent: &str| match project_root {
         Some(root) => workflow::definition_exists(root, agent, home),
         None => home.is_some_and(|h| workflow::global_definition_path(h, agent).exists()),
@@ -226,7 +226,8 @@ mod tests {
     /// Rows for the project tier alone, against an empty global tier.
     fn project_rows(root: &Path) -> ListOutput {
         let empty = tempdir().unwrap();
-        list_rows_in(Some(root), empty.path(), None, &Disabled::default()).unwrap()
+        let global = workflow::GlobalTier::under(empty.path());
+        list_rows_in(Some(root), &global, None, &Disabled::default()).unwrap()
     }
 
     fn write_workflow(project_root: &Path, name: &str, body: &str, md: &str) {
@@ -249,6 +250,7 @@ mod tests {
     fn list_marks_a_workflow_whose_disabled_member_has_no_custom() {
         let (_dir, root) = setup_project_root();
         let empty = tempdir().unwrap();
+        let global = workflow::GlobalTier::under(empty.path());
         let disabled = Disabled::from_config(toml::from_str("agents = [\"qa\"]").unwrap());
         write_workflow(
             &root,
@@ -256,11 +258,7 @@ mod tests {
             "description = \"d\"\nagents = [\"qa\"]\n",
             "",
         );
-        let rows = |d: &Disabled| {
-            list_rows_in(Some(&root), empty.path(), None, d)
-                .unwrap()
-                .rows
-        };
+        let rows = |d: &Disabled| list_rows_in(Some(&root), &global, None, d).unwrap().rows;
 
         assert!(
             rows(&disabled)[0].ends_with("— d (unavailable: agent 'qa' disabled)"),

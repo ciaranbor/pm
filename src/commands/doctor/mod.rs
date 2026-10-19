@@ -76,6 +76,9 @@ pub enum IssueKind {
     DisabledStillInstalled,
     /// Something pm or a workflow needs is disabled and no custom provides it.
     BundledDisabledDangling,
+    /// A bundled workflow's copy is left where releases before the data dir
+    /// installed it.
+    LegacyBundledWorkflow,
     /// A project override whose content equals the bundled asset it shadows.
     RedundantOverride,
     /// A project custom skill the harness resolves its global namesake over.
