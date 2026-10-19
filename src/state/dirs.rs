@@ -1,11 +1,13 @@
 //! Where pm keeps its global files, by the XDG Base Directory spec on every
-//! OS, macOS included: config (`$XDG_CONFIG_HOME/pm`, the git-backed
-//! registry repo), state (`$XDG_STATE_HOME/pm`, machine-written files kept
-//! across runs, `pm serve`'s secrets among them), cache (`$XDG_CACHE_HOME/pm`,
-//! disposable) and runtime (`$XDG_RUNTIME_DIR/pm`, locks and the wake FIFO).
-//! A variable counts only when set to an absolute path; the spec says to
-//! ignore a relative one. With no `$XDG_RUNTIME_DIR`, runtime files go
-//! under the state dir rather than a shared `/tmp`.
+//! OS, macOS included: config (`$XDG_CONFIG_HOME/pm`, the git-backed registry
+//! repo), data (`$XDG_DATA_HOME/pm`, files pm ships and rewrites each
+//! release, the bundled workflows among them), state (`$XDG_STATE_HOME/pm`,
+//! machine-written files kept across runs, `pm serve`'s secrets among them),
+//! cache (`$XDG_CACHE_HOME/pm`, disposable) and runtime
+//! (`$XDG_RUNTIME_DIR/pm`, locks and the wake FIFO). A variable counts only
+//! when set to an absolute path; the spec says to ignore a relative one. With
+//! no `$XDG_RUNTIME_DIR`, runtime files go under the state dir rather than a
+//! shared `/tmp`.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -28,6 +30,7 @@ pub struct Dirs {
     pub state: PathBuf,
     pub cache: PathBuf,
     pub runtime: PathBuf,
+    pub data: PathBuf,
     /// `$XDG_DATA_HOME` itself, not pm's dir under it: other tools' data
     /// (opencode's database) is found there.
     pub data_home: PathBuf,
@@ -39,11 +42,13 @@ impl Dirs {
         let var = |name: &str| env(name).map(PathBuf::from).filter(|dir| dir.is_absolute());
         let base = |name: &str, default: &str| var(name).unwrap_or_else(|| home.join(default));
         let state = base("XDG_STATE_HOME", ".local/state").join(NAME);
+        let data_home = base("XDG_DATA_HOME", ".local/share");
         Self {
             config: base("XDG_CONFIG_HOME", ".config").join(NAME),
             cache: base("XDG_CACHE_HOME", ".cache").join(NAME),
             runtime: var("XDG_RUNTIME_DIR").map_or_else(|| state.join("run"), |d| d.join(NAME)),
-            data_home: base("XDG_DATA_HOME", ".local/share"),
+            data: data_home.join(NAME),
+            data_home,
             state,
         }
     }
@@ -70,6 +75,7 @@ mod tests {
                 state: "/home/u/.local/state/pm".into(),
                 cache: "/home/u/.cache/pm".into(),
                 runtime: "/home/u/.local/state/pm/run".into(),
+                data: "/home/u/.local/share/pm".into(),
                 data_home: "/home/u/.local/share".into(),
             }
         );
@@ -88,6 +94,7 @@ mod tests {
         assert_eq!(dirs.state, Path::new("/s/pm"));
         assert_eq!(dirs.cache, Path::new("/k/pm"));
         assert_eq!(dirs.runtime, Path::new("/run/user/1/pm"));
+        assert_eq!(dirs.data, Path::new("/d/pm"));
         assert_eq!(dirs.data_home, Path::new("/d"));
     }
 

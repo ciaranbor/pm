@@ -34,7 +34,7 @@ pub(super) fn asset_issues(
 
     issues.extend(bundled_issues(
         project_root,
-        &workflow::global_dir()?,
+        &workflow::GlobalTier::resolve()?,
         paths::home_dir().ok().as_deref(),
         &Disabled::load(),
     )?);
@@ -49,6 +49,9 @@ pub(super) fn asset_issues(
             fix: Fix::Auto(FixAction::InstallGlobalAssets),
         });
     }
+    issues.extend(legacy_workflow_issues(skills::legacy_copies(
+        &skills::GlobalStore::resolve()?,
+    )?));
 
     if !skills::is_migrated(project_root) {
         let stale = skills::stale_bundled_copies(project_root)?;
@@ -101,12 +104,40 @@ pub(super) fn asset_issues(
     Ok(issues)
 }
 
+/// Bundled workflow copies left in the pm config dir: those pm shipped go
+/// with the next install; an edited one is the user's to move.
+fn legacy_workflow_issues(copies: skills::LegacyCopies) -> Vec<Issue> {
+    let mut issues = Vec::new();
+    if !copies.shipped.is_empty() {
+        issues.push(Issue {
+            kind: IssueKind::LegacyBundledWorkflow,
+            message: format!(
+                "old copies of bundled workflows in the pm config dir: {} (run `pm update`)",
+                copies.shipped.join(", ")
+            ),
+            fix: Fix::Auto(FixAction::InstallGlobalAssets),
+        });
+    }
+    for dir in &copies.edited {
+        issues.push(Issue {
+            kind: IssueKind::LegacyBundledWorkflow,
+            message: format!(
+                "edited copy of a bundled workflow left in {}, which pm no longer updates \
+                 (move the edits to a project's .pm/workflows/, then delete it)",
+                dir.display()
+            ),
+            fix: Fix::None,
+        });
+    }
+    issues
+}
+
 /// Findings about the global config's `[bundled.disable]` table: what it disables,
 /// names in it pm doesn't bundle, and references to a disabled name that no
 /// custom resolves.
 fn bundled_issues(
     project_root: &Path,
-    global_dir: &Path,
+    global: &workflow::GlobalTier,
     home: Option<&Path>,
     disabled: &Disabled,
 ) -> Result<Vec<Issue>> {
@@ -130,7 +161,7 @@ fn bundled_issues(
             fix: Fix::None,
         });
     }
-    for reference in disabled.dangling(project_root, global_dir, home)? {
+    for reference in disabled.dangling(project_root, global, home)? {
         issues.push(Issue {
             kind: IssueKind::BundledDisabledDangling,
             message: format!(
@@ -244,11 +275,54 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn legacy_workflow_issues_auto_fix_shipped_copies_and_leave_edited_ones() {
+        let home = tempdir().unwrap();
+        let store = skills::GlobalStore::at(home.path());
+        let old = store.legacy_workflows_dir();
+        for (rel, content) in [
+            ("solo/config.toml", "shipped\n"),
+            ("pr-review/config.toml", "edited\n"),
+        ] {
+            std::fs::create_dir_all(old.join(rel).parent().unwrap()).unwrap();
+            std::fs::write(old.join(rel), content).unwrap();
+        }
+        let hash = crate::hash::sha256_hex(b"shipped\n");
+        let hashes = [hash.as_str()];
+        let table: Vec<(&str, &[&str])> = vec![
+            ("solo/config.toml", &hashes),
+            ("pr-review/config.toml", &hashes),
+        ];
+
+        let issues = legacy_workflow_issues(skills::legacy_copies_of(&store, &table).unwrap());
+        let found: Vec<(IssueKind, bool, bool)> = issues
+            .iter()
+            .map(|i| {
+                (
+                    i.kind,
+                    matches!(i.fix, Fix::Auto(FixAction::InstallGlobalAssets)),
+                    i.message.contains("pr-review"),
+                )
+            })
+            .collect();
+        assert_eq!(
+            found,
+            vec![
+                (IssueKind::LegacyBundledWorkflow, true, false),
+                (IssueKind::LegacyBundledWorkflow, false, true),
+            ],
+            "{:?}",
+            issues.iter().map(|i| &i.message).collect::<Vec<_>>()
+        );
+        assert!(issues[0].message.contains("solo"));
+    }
+
+    #[test]
     fn bundled_issues_report_dangling_references_and_unknown_names() {
         let root = tempdir().unwrap();
-        let global = tempdir().unwrap();
+        let global_dir = tempdir().unwrap();
+        let global = workflow::GlobalTier::under(global_dir.path());
         let home = tempdir().unwrap();
-        let wf = global.path().join("research-implement-review");
+        let wf = global.bundled.join("research-implement-review");
         std::fs::create_dir_all(&wf).unwrap();
         std::fs::write(
             wf.join("config.toml"),
@@ -260,7 +334,7 @@ mod tests {
                 .unwrap(),
         );
         let messages = |d: &Disabled| -> Vec<(IssueKind, String)> {
-            bundled_issues(root.path(), global.path(), Some(home.path()), d)
+            bundled_issues(root.path(), &global, Some(home.path()), d)
                 .unwrap()
                 .into_iter()
                 .map(|i| (i.kind, i.message))

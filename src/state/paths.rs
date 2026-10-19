@@ -45,7 +45,7 @@ pub fn global_dirs() -> Result<Dirs> {
 }
 
 /// The pm config dir ([`Dirs::config`]): the project registry, global
-/// `config.toml`, `notices.md`, and the global `workflows/` tier.
+/// `config.toml`, `notices.md`, and global custom workflows.
 pub fn global_config_dir() -> Result<PathBuf> {
     Ok(global_dirs()?.config)
 }
@@ -70,14 +70,19 @@ pub fn global_projects_dir() -> Result<PathBuf> {
     Ok(global_config_dir()?.join(PROJECTS_DIR_NAME))
 }
 
-/// The global workflow tier: `<config dir>/workflows/`.
-pub fn global_workflows_dir() -> Result<PathBuf> {
-    Ok(global_config_dir()?.join(WORKFLOWS_DIR_NAME))
+/// The pm data dir ([`Dirs::data`]).
+pub fn global_data_dir() -> Result<PathBuf> {
+    Ok(global_dirs()?.data)
 }
 
-/// The global workflow tier under an explicit config dir; see
-/// [`global_workflows_dir`].
-pub fn global_workflows_dir_in(config_dir: &Path) -> PathBuf {
+/// Where the bundled workflows install: `<data dir>/workflows/`.
+pub fn bundled_workflows_dir_in(data_dir: &Path) -> PathBuf {
+    data_dir.join(WORKFLOWS_DIR_NAME)
+}
+
+/// Global custom workflows: `<config dir>/workflows/`, where releases before
+/// the data dir also installed the bundled ones.
+pub fn custom_workflows_dir_in(config_dir: &Path) -> PathBuf {
     config_dir.join(WORKFLOWS_DIR_NAME)
 }
 
@@ -585,6 +590,6 @@ mod tests {
         assert!(global_state_dir().unwrap().starts_with(&home));
         assert!(global_runtime_dir().unwrap().starts_with(&home));
         assert!(global_projects_dir().unwrap().ends_with("pm/projects"));
-        assert!(global_workflows_dir().unwrap().ends_with("pm/workflows"));
+        assert!(global_data_dir().unwrap().starts_with(&home));
     }
 }

@@ -67,7 +67,7 @@ fn global_init_at(
         pull_hint: "pm state pull --global",
         reset_when_diverged: true,
         pre_init: Some(Box::new(|dir: &Path| {
-            crate::commands::state_gitignore::write_global_gitignore(dir, false)?;
+            crate::commands::state_gitignore::write_global_gitignore(dir)?;
             Ok(())
         })),
         post_remote: None,
@@ -619,21 +619,15 @@ mod tests {
     }
 
     #[test]
-    fn global_init_adds_the_bundled_block_to_a_pre_existing_gitignore() {
+    fn global_init_commits_a_pre_existing_gitignore_as_is() {
         let dir = tempdir().unwrap();
         let global = setup_global_dir(dir.path());
-        std::fs::write(global.join(".gitignore"), "*.lock\n").unwrap();
-        let bundled = crate::commands::skills::bundled_workflow_names()[0];
-        let wf = global.join("workflows").join(bundled);
-        std::fs::create_dir_all(&wf).unwrap();
-        std::fs::write(wf.join("config.toml"), "x").unwrap();
+        std::fs::write(global.join(".gitignore"), "mine\n").unwrap();
 
         global_init_at(&global, &aside(&global), false, None).unwrap();
 
         let committed = git::cat_file(&global, "HEAD:.gitignore").unwrap();
-        assert!(committed.starts_with("*.lock\n"));
-        assert!(git::ls_files(&global, "workflows").unwrap().is_empty());
-        assert!(wf.join("config.toml").is_file());
+        assert_eq!(committed, "mine");
     }
 
     #[test]

@@ -198,7 +198,7 @@ pub(super) fn agents_configs(project_root: &Path) -> Result<(AgentsConfig, Agent
 /// Main-scope findings for each installed workflow, in either tier, whose
 /// `config.toml` fails to load: no feature can start on it.
 pub(super) fn workflow_config_issues(project_root: &Path) -> Result<Vec<Issue>> {
-    let global = workflow::global_dir()?;
+    let global = workflow::GlobalTier::resolve()?;
     let installed = workflow::list_installed_in(Some(project_root), &global)?;
     Ok(installed
         .errors

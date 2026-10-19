@@ -11,12 +11,12 @@ use crate::hash::sha256_hex;
 use crate::state::paths;
 
 use super::super::bundled_disable::Disabled;
-use super::super::state_gitignore;
 use super::bundled::{BUNDLED_ITEMS, BundledKind, RETIRED_ITEMS, RetiredItem, items_of_kind};
 use super::install::{
     Applied, enabled_items, install_items, install_items_dry_run, install_messages,
     prune_empty_parents, uninstall_in,
 };
+use super::legacy_workflows::{self, remove_legacy_copies};
 use super::projection::{project_global, project_global_from};
 use super::{BASELINE_FILE, CANONICAL_DIR};
 
@@ -26,22 +26,28 @@ use super::{BASELINE_FILE, CANONICAL_DIR};
 pub struct GlobalStore {
     pub home: PathBuf,
     pub config_dir: PathBuf,
+    pub data_dir: PathBuf,
 }
 
 impl GlobalStore {
     pub fn resolve() -> Result<Self> {
+        let home = paths::home_dir()?;
+        let dirs = paths::dirs_under(&home);
         Ok(Self {
-            home: paths::home_dir()?,
-            config_dir: paths::global_config_dir()?,
+            home,
+            config_dir: dirs.config,
+            data_dir: dirs.data,
         })
     }
 
-    /// A store rooted entirely under `home`, with the config dir at
-    /// `<home>/.config/pm` (also the layout `cfg(test)` resolution uses).
+    /// A store rooted entirely under `home`, with the XDG default layout
+    /// (also what `cfg(test)` resolution uses).
     pub fn at(home: &Path) -> Self {
+        let dirs = paths::Dirs::resolve(home, |_| None);
         Self {
             home: home.to_path_buf(),
-            config_dir: home.join(".config").join("pm"),
+            config_dir: dirs.config,
+            data_dir: dirs.data,
         }
     }
 
@@ -50,7 +56,12 @@ impl GlobalStore {
     }
 
     pub fn workflows_dir(&self) -> PathBuf {
-        paths::global_workflows_dir_in(&self.config_dir)
+        paths::bundled_workflows_dir_in(&self.data_dir)
+    }
+
+    /// Where releases before the data dir installed the bundled workflows.
+    pub fn legacy_workflows_dir(&self) -> PathBuf {
+        paths::custom_workflows_dir_in(&self.config_dir)
     }
 
     pub fn baseline_path(&self) -> PathBuf {
@@ -181,6 +192,10 @@ pub fn install_global_in(store: &GlobalStore) -> Result<Vec<String>> {
             .into_iter()
             .map(|item| format!("Removed disabled {item} (global)")),
     );
+    lines.extend(legacy_workflows::report(
+        &remove_legacy_copies(store, false)?,
+        false,
+    ));
     for kind in BundledKind::ALL {
         let label = kind.label();
         for (item, applied) in install_items(&store.dir(kind), enabled_items(kind, &disabled))? {
@@ -193,10 +208,6 @@ pub fn install_global_in(store: &GlobalStore) -> Result<Vec<String>> {
             lines.push(format!("{verb} {label} '{}' (global)", item.name));
         }
     }
-    lines.extend(state_gitignore::sync_global_registry_ignore(
-        &store.config_dir,
-        false,
-    )?);
     lines.extend(project_global(store, false)?);
     Ok(lines)
 }
@@ -217,15 +228,15 @@ pub fn install_global_dry_run_in(store: &GlobalStore) -> Result<Vec<String>> {
             .into_iter()
             .map(|item| format!("Would remove disabled {item} (global)")),
     );
+    lines.extend(legacy_workflows::report(
+        &remove_legacy_copies(store, true)?,
+        true,
+    ));
     for kind in BundledKind::ALL {
         for line in install_items_dry_run(&store.dir(kind), enabled_items(kind, &disabled))? {
             lines.push(format!("{line} (global)"));
         }
     }
-    lines.extend(state_gitignore::sync_global_registry_ignore(
-        &store.config_dir,
-        true,
-    )?);
     // The projection diffs the canonical store against the harness dir, so
     // diff the store as the install would leave it, not as it is now.
     let staged = tempfile::tempdir()?;
@@ -314,93 +325,37 @@ mod tests {
     use crate::commands::skills::audit::{
         disabled_still_installed_in, global_store_missing_in, unprojected_global_definitions_in,
     };
-    use crate::commands::skills::bundled_workflow_names;
     use crate::commands::skills::test_support::*;
 
-    /// A registry repo that committed a bundled workflow (as pre-fix
-    /// releases did) and a custom one.
-    fn registry_with_committed_workflows(store: &GlobalStore, bundled: &str) {
-        crate::git::init_repo(&store.config_dir).unwrap();
-        for name in [bundled, "mine"] {
-            let dir = store.workflows_dir().join(name);
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::write(dir.join("config.toml"), "stale\n").unwrap();
-        }
-        crate::git::add_all(&store.config_dir).unwrap();
-        crate::git::commit(&store.config_dir, "old release").unwrap();
-    }
-
     #[test]
-    fn install_global_untracks_committed_bundled_workflows_and_keeps_customs() {
+    fn install_global_keeps_an_edited_old_copy_and_the_old_ignore_block() {
         let home = tempfile::tempdir().unwrap();
         let store = GlobalStore::at(home.path());
-        let names = bundled_workflow_names();
-        let bundled = names[0];
-        registry_with_committed_workflows(&store, bundled);
-        let repo = &store.config_dir;
-        assert!(!crate::git::ls_files(repo, "workflows").unwrap().is_empty());
+        let old = store.legacy_workflows_dir();
+        for (name, content) in [("solo", "# my edits\n"), ("mine", "description = \"x\"\n")] {
+            fs::create_dir_all(old.join(name)).unwrap();
+            fs::write(old.join(name).join("config.toml"), content).unwrap();
+        }
+        let gitignore = store.config_dir.join(".gitignore");
+        let old_block = "*.lock\n\n# >>> managed by pm — regenerated, edit outside this block >>>\n\
+                         /workflows/solo/\n# <<< managed by pm <<<\n";
+        fs::write(&gitignore, old_block).unwrap();
 
+        let dry = install_global_dry_run_in(&store).unwrap();
         let lines = install_global_in(&store).unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.starts_with(&format!("Untracked workflows/{bundled} from"))),
-            "{lines:?}"
-        );
-
-        let tracked = crate::git::ls_files(repo, "workflows").unwrap();
-        assert_eq!(tracked, vec!["workflows/mine/config.toml".to_string()]);
-        // Untracked, not deleted — and the install rewrote it.
-        for name in &names {
+        for out in [&dry, &lines] {
             assert!(
-                store
-                    .workflows_dir()
-                    .join(name)
-                    .join("config.toml")
-                    .is_file()
+                out.iter().any(|l| l.starts_with(&format!(
+                    "Kept {}: edited",
+                    old.join("solo").display()
+                ))),
+                "{out:?}"
             );
         }
-
-        // The next push is clean: `add -A` re-adds nothing bundled.
-        crate::git::add_all(repo).unwrap();
-        crate::git::commit(repo, "sync").unwrap();
-        assert_eq!(crate::git::status_short(repo).unwrap().trim(), "");
-        assert_eq!(
-            crate::git::ls_files(repo, "workflows").unwrap(),
-            vec!["workflows/mine/config.toml".to_string()]
-        );
-
-        let again = install_global_in(&store).unwrap();
-        assert!(
-            !again.iter().any(|l| l.starts_with("Untracked")),
-            "{again:?}"
-        );
-    }
-
-    #[test]
-    fn install_global_dry_run_reports_untrack_without_touching_the_index() {
-        let home = tempfile::tempdir().unwrap();
-        let store = GlobalStore::at(home.path());
-        let bundled = bundled_workflow_names()[0];
-        registry_with_committed_workflows(&store, bundled);
-        let before = crate::git::ls_files(&store.config_dir, "workflows").unwrap();
-
-        let lines = install_global_dry_run_in(&store).unwrap();
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.starts_with(&format!("Would untrack workflows/{bundled} from"))),
-            "{lines:?}"
-        );
-        assert!(
-            lines.iter().any(|l| l.starts_with("Would update")),
-            "{lines:?}"
-        );
-        assert_eq!(
-            crate::git::ls_files(&store.config_dir, "workflows").unwrap(),
-            before
-        );
-        assert!(!store.config_dir.join(".gitignore").exists());
+        assert_eq!(fs::read_to_string(&gitignore).unwrap(), old_block);
+        assert!(old.join("solo/config.toml").is_file());
+        assert!(old.join("mine/config.toml").is_file());
+        assert!(store.workflows_dir().join("solo/config.toml").is_file());
     }
 
     #[test]
@@ -450,8 +405,11 @@ mod tests {
         assert!(h.join(".agents/skills/messaging/SKILL.md").exists());
         assert!(h.join(".agents/agents/reviewer.md").exists());
         assert!(h.join(".agents/pm-baseline.md").exists());
-        assert!(h.join(".config/pm/workflows/solo/config.toml").exists());
-        assert_eq!(store.workflows_dir(), h.join(".config/pm/workflows"));
+        assert!(
+            h.join(".local/share/pm/workflows/solo/config.toml")
+                .exists()
+        );
+        assert!(!h.join(".config/pm/workflows").exists());
         for harness in Harness::SUPPORTED {
             let dir = harness.global_config_dir(h).unwrap();
             if harness.projects_definitions() {
@@ -509,7 +467,7 @@ mod tests {
             ".config/opencode/agents/qa.md",
             ".agents/skills/messaging",
             ".claude/skills/messaging",
-            ".config/pm/workflows/research-only",
+            ".local/share/pm/workflows/research-only",
             ".agents/pm-baseline.md",
         ];
         for path in gone {
@@ -547,7 +505,7 @@ mod tests {
             ".agents/agents/reviewer.md",
             ".claude/agents/reviewer.md",
             ".agents/skills/pm-workflow/SKILL.md",
-            ".config/pm/workflows/solo/config.toml",
+            ".local/share/pm/workflows/solo/config.toml",
         ] {
             assert!(h.join(path).exists(), "{path}");
         }

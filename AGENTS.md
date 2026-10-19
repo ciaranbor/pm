@@ -17,8 +17,8 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
 - **Bundled assets** (`bundled/`, embedded by `commands/skills/`) — a global
   tier, where bundled names are reserved, and a project tier of the user's
   customs that shadows it by name, each *projected* into the harness's layout.
-  Projection deletes only what `skills/mod.rs`'s `//!` lists. Bundled workflows are
-  never git-backed (`state_gitignore.rs`).
+  Projection deletes only what `skills/mod.rs`'s `//!` lists. Bundled workflows
+  install to the data dir, never the git-backed config dir (`state/workflow.rs`).
   Home's supervisor skill lives only in home's project tier, never the global
   one, so no other agent lists it (`onboard.rs`).
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state moves.

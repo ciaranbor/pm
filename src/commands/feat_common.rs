@@ -44,7 +44,7 @@ pub fn resolve_workflow<'a>(
         project_root,
         workflow,
         context,
-        &crate::state::workflow::global_dir()?,
+        &crate::state::workflow::GlobalTier::resolve()?,
         &Disabled::load(),
     )
 }
@@ -54,14 +54,14 @@ pub fn resolve_workflow_in<'a>(
     project_root: &Path,
     workflow: Option<&'a str>,
     context: Option<&str>,
-    global_dir: &Path,
+    global: &crate::state::workflow::GlobalTier,
     disabled: &Disabled,
 ) -> Result<Option<&'a str>> {
     match (workflow, context) {
         (Some(w), _) if w == scope::MAIN_WORKFLOW => Err(PmError::MainScopeWorkflow(w.into())),
         (Some(w), _) => Ok(Some(w)),
         (None, Some(_)) => {
-            if crate::state::workflow::resolve_dir(Some(project_root), DEFAULT_WORKFLOW, global_dir)
+            if crate::state::workflow::resolve_dir(Some(project_root), DEFAULT_WORKFLOW, global)
                 .is_none()
             {
                 if disabled.workflow(DEFAULT_WORKFLOW) {
@@ -207,7 +207,7 @@ pub fn load_and_validate_workflow(project_root: &Path, name: &str) -> Result<Wor
     let def = load_and_validate_team(
         project_root,
         name,
-        &crate::state::workflow::global_dir()?,
+        &crate::state::workflow::GlobalTier::resolve()?,
         paths::home_dir().ok().as_deref(),
         &Disabled::load(),
     )?;
@@ -221,13 +221,12 @@ pub fn load_and_validate_workflow(project_root: &Path, name: &str) -> Result<Wor
 fn load_and_validate_team(
     project_root: &Path,
     name: &str,
-    global_dir: &Path,
+    global: &crate::state::workflow::GlobalTier,
     home: Option<&Path>,
     disabled: &Disabled,
 ) -> Result<WorkflowDef> {
     let explain = |e| disabled.explain(project_root, e);
-    let def =
-        WorkflowDef::load_with_global(Some(project_root), name, global_dir).map_err(explain)?;
+    let def = WorkflowDef::load_with_global(Some(project_root), name, global).map_err(explain)?;
     def.validate_with_home(project_root, name, home)
         .map_err(explain)?;
     Ok(def)
@@ -279,6 +278,7 @@ pub fn rollback_creation(params: &RollbackParams<'_>) {
 mod tests {
     use super::*;
     use crate::commands::agent_read;
+    use crate::state::workflow::GlobalTier;
     use tempfile::tempdir;
 
     #[test]
@@ -310,7 +310,8 @@ mod tests {
     fn context_without_workflow_defaults_to_solo_from_either_tier() {
         let dir = tempdir().unwrap();
         let project_root = dir.path();
-        let global = tempdir().unwrap();
+        let global_dir = tempdir().unwrap();
+        let global = GlobalTier::under(global_dir.path());
 
         // Nothing installed: the default is actionable rather than a
         // generic not-found.
@@ -318,7 +319,7 @@ mod tests {
             project_root,
             None,
             Some("brief"),
-            global.path(),
+            &global,
             &Disabled::default(),
         )
         .unwrap_err()
@@ -326,7 +327,7 @@ mod tests {
         assert!(err.contains("'solo'") && err.contains("pm update"), "{err}");
 
         // Global tier alone is enough …
-        let solo = global.path().join(DEFAULT_WORKFLOW);
+        let solo = global.bundled.join(DEFAULT_WORKFLOW);
         std::fs::create_dir_all(&solo).unwrap();
         std::fs::write(solo.join("config.toml"), "description = \"solo\"\n").unwrap();
         assert_eq!(
@@ -334,7 +335,7 @@ mod tests {
                 project_root,
                 None,
                 Some("brief"),
-                global.path(),
+                &global,
                 &Disabled::default()
             )
             .unwrap(),
@@ -346,31 +347,25 @@ mod tests {
                 project_root,
                 Some("other"),
                 None,
-                global.path(),
+                &global,
                 &Disabled::default()
             )
             .unwrap(),
             Some("other")
         );
         assert_eq!(
-            resolve_workflow_in(
-                project_root,
-                None,
-                None,
-                global.path(),
-                &Disabled::default()
-            )
-            .unwrap(),
+            resolve_workflow_in(project_root, None, None, &global, &Disabled::default()).unwrap(),
             None
         );
     }
     #[test]
     fn a_disabled_default_workflow_says_so_instead_of_pm_upgrade() {
         let dir = tempdir().unwrap();
-        let global = tempdir().unwrap();
+        let global_dir = tempdir().unwrap();
+        let global = GlobalTier::under(global_dir.path());
         let disabled = Disabled::from_config(toml::from_str("workflows = [\"solo\"]").unwrap());
-        let err = resolve_workflow_in(dir.path(), None, Some("brief"), global.path(), &disabled)
-            .unwrap_err();
+        let err =
+            resolve_workflow_in(dir.path(), None, Some("brief"), &global, &disabled).unwrap_err();
         assert!(matches!(err, PmError::BundledDisabled { .. }), "{err}");
     }
 
@@ -378,19 +373,14 @@ mod tests {
     fn disabled_bundled_workflows_and_members_are_refused_unless_customs_resolve() {
         let dir = tempdir().unwrap();
         let project_root = dir.path();
-        let global = tempdir().unwrap();
+        let global_dir = tempdir().unwrap();
+        let global = GlobalTier::under(global_dir.path());
         let home = tempdir().unwrap();
         let disabled = Disabled::from_config(
             toml::from_str("agents = [\"qa\"]\nworkflows = [\"research-only\"]").unwrap(),
         );
         let load = |name| {
-            load_and_validate_team(
-                project_root,
-                name,
-                global.path(),
-                Some(home.path()),
-                &disabled,
-            )
+            load_and_validate_team(project_root, name, &global, Some(home.path()), &disabled)
         };
 
         let err = load("research-only").unwrap_err();

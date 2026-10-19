@@ -58,6 +58,7 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::BundledUnknown
         | IssueKind::DisabledStillInstalled
         | IssueKind::BundledDisabledDangling
+        | IssueKind::LegacyBundledWorkflow
         | IssueKind::AgentLaunchStale => false,
     }
 }

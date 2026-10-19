@@ -131,8 +131,7 @@ fn feat_new_resolves_a_global_custom_workflow() {
         }
     }
     let guard = RemoveOnDrop(
-        paths::global_workflows_dir()
-            .unwrap()
+        paths::custom_workflows_dir_in(&paths::global_config_dir().unwrap())
             .join("global-custom-flow"),
     );
     let wf = &guard.0;

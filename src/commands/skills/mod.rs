@@ -2,7 +2,7 @@
 //!
 //! Every bundled kind installs once into the **global tier**: skills, agent
 //! definitions, and the baseline under `~/.agents/`, workflows under the pm
-//! config dir. `pm init`/`pm update` refresh it and the bundle is
+//! data dir. `pm init`/`pm update` refresh it and the bundle is
 //! authoritative there (bundled names are reserved). The **project tier**
 //! (`main/.agents/{agents,skills}`, `.pm/workflows/`) holds only the user's
 //! customs and shadows the global tier by name. No harness reads pm's
@@ -20,12 +20,15 @@
 //! every global install, an item the global `[bundled.disable]` table
 //! disables ([`bundled_disable`](super::bundled_disable)) and a file of an
 //! item pm no longer bundles whose content pm shipped (`RETIRED_ITEMS` in
-//! `bundled.rs`).
+//! `bundled.rs`). Each global install also deletes the bundled workflows'
+//! shipped copies from their old home in the config dir
+//! (`legacy_workflows/`).
 
 mod audit;
 mod bundled;
 mod global_store;
 mod install;
+mod legacy_workflows;
 mod migration;
 mod projection;
 
@@ -48,6 +51,9 @@ pub use global_store::{
     GlobalStore, install_global, install_global_dry_run, install_global_dry_run_in,
     install_global_in,
 };
+#[cfg(test)]
+pub(crate) use legacy_workflows::legacy_copies_of;
+pub use legacy_workflows::{LegacyCopies, legacy_copies};
 pub(crate) use migration::scoped_worktrees_on_disk;
 pub use migration::{
     is_migrated, migrate_project_to_global, stale_bundled_copies, write_migration_marker,

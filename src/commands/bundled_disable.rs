@@ -97,20 +97,19 @@ impl Disabled {
     pub fn dangling(
         &self,
         project_root: &Path,
-        global_dir: &Path,
+        global: &workflow::GlobalTier,
         home: Option<&Path>,
     ) -> Result<Vec<String>> {
         let mut out = Vec::new();
         let agent_missing =
             |name: &str| self.agent(name) && !workflow::definition_exists(project_root, name, home);
         let workflow_missing = |name: &str| {
-            self.workflow(name)
-                && workflow::resolve_dir(Some(project_root), name, global_dir).is_none()
+            self.workflow(name) && workflow::resolve_dir(Some(project_root), name, global).is_none()
         };
 
         // Main's workflow, once installed, reports its lead, the orchestrator.
         let mut main_workflow_listed = false;
-        for w in workflow::list_installed_in(Some(project_root), global_dir)?.workflows {
+        for w in workflow::list_installed_in(Some(project_root), global)?.workflows {
             main_workflow_listed |= w.name == scope::MAIN_WORKFLOW;
             for agent in w.def.agents.iter().filter(|a| agent_missing(a)) {
                 out.push(format!("workflow '{}' needs agent '{agent}'", w.name));
@@ -257,6 +256,7 @@ mod tests {
     fn dangling_names_once_the_orchestrator_a_shadowed_main_workflow_runs() {
         let root = tempfile::tempdir().unwrap();
         let global = tempfile::tempdir().unwrap();
+        let global = workflow::GlobalTier::under(global.path());
         let home = tempfile::tempdir().unwrap();
         let shadow = paths::workflows_dir(root.path()).join(scope::MAIN_WORKFLOW);
         std::fs::create_dir_all(&shadow).unwrap();
@@ -266,7 +266,7 @@ mod tests {
         )
         .unwrap();
         let lines = disabled("agents = [\"main\", \"supervisor\"]\n")
-            .dangling(root.path(), global.path(), Some(home.path()))
+            .dangling(root.path(), &global, Some(home.path()))
             .unwrap();
         assert_eq!(
             lines,

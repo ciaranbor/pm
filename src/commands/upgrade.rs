@@ -427,8 +427,7 @@ last_active = "2026-01-01T00:00:00Z"
         assert!(home.join(".claude/agents/reviewer.md").exists());
         assert!(home.join(".agents/pm-baseline.md").exists());
         assert!(
-            paths::global_workflows_dir()
-                .unwrap()
+            paths::bundled_workflows_dir_in(&paths::global_data_dir().unwrap())
                 .join("implement-and-review/workflow.md")
                 .exists()
         );
