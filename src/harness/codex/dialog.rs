@@ -53,6 +53,7 @@ pub(in crate::harness) fn dialog(payload: &Value) -> Option<(Dialog, Value)> {
                     .map(|label| QuestionOption {
                         label: label.to_string(),
                         description: String::new(),
+                        preview: None,
                     })
                     .collect(),
                 multi_select: false,

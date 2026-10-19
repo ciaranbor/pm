@@ -29,7 +29,13 @@ data class Dialog(
         val custom: Boolean = false,
     )
 
-    @Serializable data class Option(val label: String, val description: String = "")
+    @Serializable
+    data class Option(
+        val label: String,
+        val description: String = "",
+        /** What picking it would produce, verbatim: a mockup, a snippet. */
+        val preview: String? = null,
+    )
 
     @Serializable
     data class Choice(

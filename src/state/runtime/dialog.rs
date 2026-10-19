@@ -71,6 +71,9 @@ pub struct Question {
 pub struct QuestionOption {
     pub label: String,
     pub description: String,
+    /// What picking the option would produce, verbatim: a mockup, a snippet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -432,6 +435,7 @@ mod tests {
         let option = |label: &str| QuestionOption {
             label: label.into(),
             description: String::new(),
+            preview: None,
         };
         Dialog {
             questions: vec![

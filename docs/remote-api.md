@@ -177,7 +177,9 @@ gets `404`. A dialog's `choices` are those its harness's CLI offers (`id`,
 `label`, and `takes_message` for one that takes a `message` for the
 agent); a question dialog's `questions` are answered by the `answer`
 choice with `answers`, question text → an option's label or the user's
-own words (a list for a multi-select).
+own words (a list for a multi-select). An option has a `label` and a
+`description`, and a `preview` where its harness gives one (Claude Code):
+text to show verbatim, unwrapped.
 
 Several dialogs can be open at once — parallel subagents each asking, or
 several opencode permission asks — and each can be answered, in any
