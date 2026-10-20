@@ -24,6 +24,7 @@ import dev.pm.app.model.Conversation
 import dev.pm.app.model.Item
 import dev.pm.app.model.ToolResult
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -140,6 +141,126 @@ class ChatUiTest {
         compose
             .onNodeWithContentDescription("Go to your last message, 30 after it")
             .assertDoesNotExist()
+    }
+
+    @Test
+    fun each_jump_back_goes_to_the_users_message_before_the_last_one_it_went_to() {
+        val replies = { n: Int -> (0 until 20).map { Item.Assistant("a$n-$it", null, "reply") } }
+        val items = (0 until 4).flatMap { listOf(user(it)) + replies(it) }
+        compose.setContent { Chat(Conversation(items)) }
+        for ((n, after) in listOf(3 to 20, 2 to 41, 1 to 62, 0 to 83)) {
+            val which = if (n == 3) "last" else "earlier"
+            compose.onNodeWithText("message $n").assertDoesNotExist()
+            compose
+                .onNodeWithContentDescription("Go to your $which message, $after after it")
+                .performClick()
+            compose.onNodeWithText("message $n").assertIsDisplayed()
+        }
+        compose.onNodeWithContentDescription("message,", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun a_scroll_by_hand_mid_walk_goes_on_from_there_and_back_at_the_end_the_walk_restarts() {
+        val replies = { n: Int -> (0 until 20).map { Item.Assistant("a$n-$it", null, "reply") } }
+        compose.setContent {
+            Chat(Conversation((0 until 4).flatMap { listOf(user(it)) + replies(it) }))
+        }
+        val list = compose.onNode(hasScrollToIndexAction())
+        // List items: the start of the conversation, then message n at 21n + 1.
+        compose.onNodeWithContentDescription("Go to your last message, 20 after it").performClick()
+        compose
+            .onNodeWithContentDescription("Go to your earlier message, 41 after it")
+            .performClick()
+        list.performScrollToIndex(21 + 6)
+        compose.onNodeWithText("message 2").assertDoesNotExist()
+        compose
+            .onNodeWithContentDescription("Go to your earlier message, 62 after it")
+            .performClick()
+        compose.onNodeWithText("message 1").assertIsDisplayed()
+
+        compose.onNodeWithContentDescription("Go to the end").performClick()
+        compose.waitForIdle()
+        list.performScrollToIndex(21 + 1)
+        compose.onNodeWithContentDescription("Go to your last message, 20 after it").assertExists()
+    }
+
+    @Test
+    fun a_scroll_away_from_where_a_jump_left_the_end_restarts_the_walk_once_back() {
+        val replies = { n: Int -> (0 until 20).map { Item.Assistant("a$n-$it", null, "reply") } }
+        val items =
+            (0 until 3).flatMap { listOf(user(it)) + replies(it) } +
+                listOf(user(3), Item.Assistant("a3", null, "reply"))
+        compose.setContent { Chat(Conversation(items)) }
+        val list = compose.onNode(hasScrollToIndexAction())
+        val last = compose.onNodeWithContentDescription("Go to your last message, 1 after it")
+        // List items: the start of the conversation, then message n at 21n + 1; 65 is the end.
+        list.performScrollToIndex(43)
+        last.performClick()
+        compose.onNodeWithText("message 3").assertIsDisplayed()
+        list.performScrollToIndex(55)
+        list.performScrollToIndex(65)
+        compose.waitForIdle()
+        list.performScrollToIndex(43)
+        last.assertExists()
+    }
+
+    @Test
+    fun a_scroll_back_by_hand_mid_walk_goes_on_from_the_top_though_the_last_stop_still_shows() {
+        val items =
+            (0 until 10).flatMap { listOf(user(it), Item.Assistant("a$it", null, "reply $it")) } +
+                (0 until 20).map { Item.Assistant("b$it", null, "more") }
+        compose.setContent { Chat(Conversation(items)) }
+        val back = { compose.onNodeWithContentDescription("Go to your", substring = true) }
+        repeat(5) { back().performClick() }
+        compose.onNodeWithText("message 5").assertIsDisplayed()
+        compose.onNodeWithText("message 4").assertDoesNotExist()
+        // List items: the start of the conversation, then message n at 2n + 1.
+        compose.onNode(hasScrollToIndexAction()).performScrollToIndex(5)
+        compose.onNodeWithText("message 5").assertIsDisplayed()
+        back().performClick()
+        compose.onNodeWithText("message 1").assertIsDisplayed()
+    }
+
+    @Test
+    fun past_the_users_oldest_loaded_message_the_jump_back_loads_older_pages_until_it_finds_one() {
+        // All on one day: each page opens under that day's divider.
+        val at = "2026-10-06T12:00:00Z"
+        val user = { n: Int -> user(n).copy(at = at) }
+        val replies = { n: Int -> (0 until 20).map { Item.Assistant("a$n-$it", at, "reply") } }
+        val page = replies(9) + listOf(user(10)) + replies(10) + listOf(user(11)) + replies(11)
+        var conversation by mutableStateOf(Conversation(page, before = "c"))
+        var asked = false
+        compose.setContent { Chat(conversation, older = { asked = true }) }
+        compose
+            .onNodeWithContentDescription("Go to your last message", substring = true)
+            .performClick()
+        compose
+            .onNodeWithContentDescription("Go to your earlier message", substring = true)
+            .performClick()
+        compose.onNodeWithText("message 10").assertIsDisplayed()
+        compose.waitForIdle()
+        assertFalse("asked for older before reaching the top", asked)
+
+        // A page with none of the user's messages, then one with them.
+        for ((older, cursor) in
+            listOf(
+                replies(5) + replies(6) + replies(7) to "c5",
+                listOf(user(0), Item.Assistant("a0", at, "reply"), user(1)) to null,
+            )) {
+            asked = false
+            compose.onNodeWithContentDescription("Go to older messages").performClick()
+            compose.waitForIdle()
+            assertTrue("never asked for older", asked)
+            conversation = conversation.prepended(older, before = cursor)
+            compose.waitForIdle()
+        }
+        for (n in listOf(1, 0)) {
+            compose
+                .onNodeWithContentDescription("Go to your earlier message", substring = true)
+                .performClick()
+            compose.onNodeWithText("message $n").assertIsDisplayed()
+        }
+        compose.onNodeWithContentDescription("message,", substring = true).assertDoesNotExist()
     }
 
     @Test
