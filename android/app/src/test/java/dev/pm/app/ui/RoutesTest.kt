@@ -4,6 +4,7 @@ import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import dev.pm.app.SNAPSHOT
 import dev.pm.app.model.AgentSnapshot
+import dev.pm.app.model.AgentState
 import dev.pm.app.model.Attention
 import dev.pm.app.model.Latest
 import dev.pm.app.model.Need
@@ -168,6 +169,43 @@ class WorkspaceTabsTest {
         val ready = snapshot.feature("app", "search")!!.copy(agents = agents)
         assertEquals("qa", defaultAgent(ready, null, agents))
         assertEquals(null, defaultAgent(ready, null, emptyList()))
+    }
+
+    @Test
+    fun an_agents_menu_starts_it_only_while_stopped_or_dead_and_its_session_is_up() {
+        val labels = { state: AgentState?, running: Boolean ->
+            agentItems("app", "login", "qa", state, running) {}.map { it.label }
+        }
+        assertEquals(listOf("Start qa"), labels(AgentState.Stopped, true))
+        assertEquals(listOf("Start qa"), labels(AgentState.Dead, true))
+        assertEquals(emptyList<String>(), labels(AgentState.Stopped, false))
+        assertEquals(emptyList<String>(), labels(AgentState.Closed, false))
+        assertEquals(listOf("Stop qa"), labels(AgentState.Idle, true))
+
+        var asked: Action? = null
+        agentItems("app", "login", "qa", AgentState.Busy, true) { asked = it }.single().onClick()
+        assertEquals(Action.Stop("app", "login", "qa", working = true), asked)
+    }
+
+    @Test
+    fun an_agent_added_is_shown_on_each_of_its_scopes_workspaces() {
+        val routes =
+            NavBackStack<NavKey>(
+                Route.Home,
+                Route.Scope("app", "login"),
+                Route.Feature("app", "login"),
+                Route.Scope("app", "x"),
+            )
+        routes.show("app", "login", "qa")
+        assertEquals(
+            listOf(
+                Route.Home,
+                Route.Scope("app", "login", "qa"),
+                Route.Feature("app", "login"),
+                Route.Scope("app", "x"),
+            ),
+            routes.toList(),
+        )
     }
 
     @Test

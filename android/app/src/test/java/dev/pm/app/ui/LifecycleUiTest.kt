@@ -16,6 +16,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.performTextReplacement
 import androidx.test.core.app.ApplicationProvider
 import dev.pm.app.OpenStream
 import dev.pm.app.SNAPSHOT
@@ -89,6 +90,11 @@ class LifecycleUiTest {
                         }
                         path == "/v1/events" -> events?.invoke() ?: reply(503, "{}")
                         path.endsWith("/merge") -> mergeCheck
+                        path.endsWith("/definitions") ->
+                            reply(
+                                200,
+                                """{"definitions":[{"name":"plain","harness":"claude-code"}]}""",
+                            )
                         // Nothing else to read: the app shows the cached snapshot.
                         else -> reply(503, "{}")
                     }
@@ -333,6 +339,76 @@ class LifecycleUiTest {
         }
         assertEquals(
             listOf("/v1/agents/app/login/implementer/restart"),
+            synchronized(posted) { posted.toList() },
+        )
+    }
+
+    @Test
+    fun an_agents_menu_offers_what_its_state_allows_and_its_delete_confirms_first() {
+        open(Target("app", "login", "implementer"))
+
+        compose.onNodeWithContentDescription("More actions").performClick()
+        compose.onNodeWithText("Stop implementer").assertIsDisplayed()
+        compose.onNodeWithText("Fork implementer…").assertIsDisplayed()
+        compose.onNodeWithText("Add agent…").assertIsDisplayed()
+        compose.onNodeWithText("Start implementer").assertDoesNotExist()
+        compose.onNodeWithText("Delete implementer").performClick()
+
+        compose.onNodeWithText("Delete implementer?").assertIsDisplayed()
+        assertEquals(emptyList<String>(), synchronized(posted) { posted.toList() })
+        compose.onNodeWithText("Delete").performClick()
+        compose.waitUntil(WAIT) {
+            compose.onAllNodesWithText("Deleted implementer").fetchSemanticsNodes().isNotEmpty()
+        }
+        assertEquals(
+            listOf("/v1/agents/app/login/implementer/delete"),
+            synchronized(posted) { posted.toList() },
+        )
+    }
+
+    @Test
+    fun a_deleted_agent_leaves_the_workspace_and_one_added_under_its_name_is_shown() {
+        val without =
+            Regex(""""agents": \[\{"name": "implementer".*?\}\}\],""", RegexOption.DOT_MATCHES_ALL)
+                .replace(SNAPSHOT, """"agents": [],""")
+        events = { stream.response("snapshot" to SNAPSHOT, later = listOf("snapshot" to without)) }
+        open(Target("app", "login", "implementer"))
+        compose.waitUntil(WAIT) { model.connection.value == Connection.Live }
+
+        compose.onNodeWithContentDescription("More actions").performClick()
+        compose.onNodeWithText("Delete implementer").performClick()
+        compose.onNodeWithText("Delete").performClick()
+        compose.waitUntil(WAIT) {
+            compose.onAllNodesWithText("Deleted implementer").fetchSemanticsNodes().isNotEmpty()
+        }
+        stream.sendLater()
+        compose.waitUntil(WAIT) {
+            compose
+                .onAllNodesWithText("No agents are running here.")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+
+        compose.onNodeWithText("Add agent").performClick()
+        compose.waitUntil(WAIT) {
+            compose
+                .onAllNodes(hasSetTextAction() and hasText("plain"))
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        }
+        compose
+            .onNode(hasSetTextAction() and hasText("plain"))
+            .performTextReplacement("implementer")
+        compose.onNodeWithText("Add").performClick()
+        compose.waitUntil(WAIT) {
+            compose.onAllNodesWithText("Added implementer").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("Message the agent").assertIsDisplayed()
+        assertEquals(
+            listOf(
+                "/v1/agents/app/login/implementer/delete",
+                "/v1/agents/app/login/implementer/spawn",
+            ),
             synchronized(posted) { posted.toList() },
         )
     }

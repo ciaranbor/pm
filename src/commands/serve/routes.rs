@@ -15,7 +15,7 @@ use crate::state::project::ProjectEntry;
 use crate::state::scope;
 
 use super::transcript::{Agent, TranscriptWatch};
-use super::{Config, docs, input, lifecycle, notes, push};
+use super::{Config, agents, docs, input, lifecycle, notes, push};
 
 mod get;
 use get::{Query, get};
@@ -175,8 +175,9 @@ pub(super) fn route(config: &Config, vapid: &str, request: &Request<'_>) -> Hand
 }
 
 /// `POST /v1/agents/{project}/{scope}/{agent}/{action}`, input for an
-/// agent or its restart, and `POST /v1/features/{project}/{feature}/{action}`,
-/// a feature's merge or delete.
+/// agent or its spawn, restart, stop, delete or fork, and
+/// `POST /v1/features/{project}/{feature}/{action}`, a feature's merge or
+/// delete.
 fn post(config: &Config, path: &str, body: &str) -> Result<input::Written> {
     let unwritten = |reply| input::Written {
         reply,
@@ -185,15 +186,21 @@ fn post(config: &Config, path: &str, body: &str) -> Result<input::Written> {
     let segments = segments(path);
     let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
     match segments[..] {
+        ["agents", project, scope, agent, "spawn"] => match scope_root(config, project, scope)? {
+            Ok(root) => agents::spawn(config, &root, scope, agent, body),
+            Err(reply) => Ok(unwritten(reply)),
+        },
         ["agents", project, scope, agent, action] => {
             let agent = match find_agent(config, project, scope, agent)? {
                 Ok(agent) => agent,
                 Err(reply) => return Ok(unwritten(reply)),
             };
-            if action != "restart" {
-                return input::post(&agent, action, body, config.tmux_server.as_deref());
+            match action {
+                "restart" => lifecycle::restart(config, &agent, body),
+                "stop" | "delete" => agents::end(config, &agent, action),
+                "fork" => agents::fork(config, &agent, body),
+                _ => input::post(&agent, action, body, config.tmux_server.as_deref()),
             }
-            lifecycle::restart(config, &agent, body)
         }
         ["features", project, feature, action @ ("merge" | "delete")] => {
             let root = match project_root(config, project)? {
@@ -210,7 +217,9 @@ fn post(config: &Config, path: &str, body: &str) -> Result<input::Written> {
 }
 
 /// `/v1/projects/{project}/notes`, the project's notes,
-/// `GET /v1/projects/{project}/docs[/{filename}]`, its information store, and
+/// `GET /v1/projects/{project}/docs[/{filename}]`, its information store,
+/// `GET /v1/projects/{project}/definitions`, the agent definitions a spawn
+/// can name, and
 /// `POST /v1/projects/{project}/{open|close|delete}`; with what a write did,
 /// for the request log.
 fn projects_route(
@@ -226,15 +235,15 @@ fn projects_route(
         [
             "projects",
             project,
-            action @ ("notes" | "docs" | "open" | "close" | "delete"),
+            action @ ("notes" | "docs" | "definitions" | "open" | "close" | "delete"),
         ] => (project, action, None),
         ["projects", project, "docs", doc] => (project, "docs", Some(doc)),
         _ => return Ok((error(404, "no such endpoint"), None)),
     };
-    if action == "docs" && method != "GET" {
+    if matches!(action, "docs" | "definitions") && method != "GET" {
         return Ok((error(405, "GET is served here"), None));
     }
-    if !matches!(action, "notes" | "docs") && method != "POST" {
+    if !matches!(action, "notes" | "docs" | "definitions") && method != "POST" {
         return Ok((error(405, "no such endpoint for this method"), None));
     }
     if action == "delete" {
@@ -248,6 +257,9 @@ fn projects_route(
         Ok(root) => root,
         Err(missing) => return Ok((error(404, missing), None)),
     };
+    if action == "definitions" {
+        return Ok((agents::definitions(&root)?, None));
+    }
     if action == "docs" {
         let reply = match doc {
             None => docs::list(&root)?,
@@ -325,6 +337,23 @@ fn bearer(authorization: &str) -> Option<&str> {
     scheme.eq_ignore_ascii_case("bearer").then_some(token)
 }
 
+/// The root of `project` when `scope` is one of its scopes, or the reply
+/// saying which of them does not exist.
+fn scope_root(
+    config: &Config,
+    project: &str,
+    scope: &str,
+) -> Result<std::result::Result<PathBuf, Reply>> {
+    let root = match project_root(config, project)? {
+        Ok(root) => root,
+        Err(missing) => return Ok(Err(error(404, missing))),
+    };
+    if scope != scope::MAIN && !has_feature(&root, scope)? {
+        return Ok(Err(error(404, "no such scope")));
+    }
+    Ok(Ok(root))
+}
+
 /// The registered agent `name` of `scope` in `project`, or the reply saying
 /// which of them does not exist.
 fn find_agent(
@@ -333,13 +362,10 @@ fn find_agent(
     scope: &str,
     name: &str,
 ) -> Result<std::result::Result<Agent, Reply>> {
-    let root = match project_root(config, project)? {
+    let root = match scope_root(config, project, scope)? {
         Ok(root) => root,
-        Err(missing) => return Ok(Err(error(404, missing))),
+        Err(reply) => return Ok(Err(reply)),
     };
-    if scope != scope::MAIN && !has_feature(&root, scope)? {
-        return Ok(Err(error(404, "no such scope")));
-    }
     let registry = AgentRegistry::load(&paths::agents_dir(&root), scope)?;
     if registry.get(name).is_none() {
         return Ok(Err(error(404, "no such agent")));

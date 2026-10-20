@@ -55,7 +55,7 @@ pub(super) fn feature(
         };
         Ok(serde_json::json!({ key: true, "warnings": ended.warnings }))
     });
-    finish(config, action, done)
+    finish(config, action.to_string(), done, |e| refusal(action, e))
 }
 
 /// `POST projects/{project}/{open|close}` for the project at `root`.
@@ -87,7 +87,7 @@ pub(super) fn project(config: &Config, root: &Path, action: &str) -> Result<Writ
             });
         }
     };
-    finish(config, action, done)
+    finish(config, action.to_string(), done, |e| refusal(action, e))
 }
 
 /// `POST projects/{project}/delete`, which also unregisters a project that
@@ -106,7 +106,7 @@ pub(super) fn delete_project(config: &Config, name: &str) -> Result<Written> {
         warnings.extend(deleted.into_iter().flat_map(|d| d.warnings));
         Ok(serde_json::json!({ "deleted": true, "warnings": warnings }))
     });
-    finish(config, "delete", done)
+    finish(config, "delete".into(), done, |e| refusal("delete", e))
 }
 
 /// A restart's body; an empty one is `{}`.
@@ -138,34 +138,42 @@ pub(super) fn restart(config: &Config, agent: &Agent, body: &str) -> Result<Writ
         .map(|line| serde_json::json!({ "restarted": line }));
     restarted.finish(server);
     let action = if force { "restart --force" } else { "restart" };
-    finish(config, action, done)
+    finish(config, action.to_string(), done, |e| refusal(action, e))
 }
 
-/// The reply to an action that ended `done`. A refusal, which changed
-/// nothing, is a `409`; any other failure may have come partway, so it is
-/// an error the device reads as such. Either way tmux and the poller are
-/// told, since state may have changed.
-fn finish(config: &Config, action: &str, done: Result<serde_json::Value>) -> Result<Written> {
+/// The reply to an action that ended `done`, logged as `detail`. A
+/// refusal, which changed nothing, is a `409` with the code and words
+/// `refused` gives it, and a name no agent may take a `400`; any other
+/// failure may have come partway, so it is an error the device reads as
+/// such. Either way tmux and the poller are told, since state may have
+/// changed.
+pub(super) fn finish(
+    config: &Config,
+    detail: String,
+    done: Result<serde_json::Value>,
+    refused: impl FnOnce(&PmError) -> Option<(&'static str, String)>,
+) -> Result<Written> {
     let _ = tmux_push::push(&config.projects_dir, config.tmux_server.as_deref());
     super::wake(&config.files);
     let reply = match done {
         Ok(body) => json(200, body),
-        Err(e) => {
-            let (refused, why) = match &e {
-                PmError::SafetyCheck(_) if action.starts_with("restart") => {
-                    ("mid-turn", e.to_string())
-                }
-                PmError::SafetyCheck(_) => ("unsafe", e.to_string()),
-                PmError::Unsafe { reason, remote, .. } => ("unsafe", format!("{reason} {remote}")),
-                PmError::MergeAborted(_) => ("conflict", e.to_string()),
-                _ => return Err(e),
-            };
-            json(409, serde_json::json!({ "error": why, "refused": refused }))
-        }
+        Err(PmError::InvalidAgentName(why)) => error(400, &why),
+        Err(e) => match refused(&e) {
+            Some((code, why)) => json(409, serde_json::json!({ "error": why, "refused": code })),
+            None => return Err(e),
+        },
     };
-    Ok(Written {
-        reply,
-        detail: action.to_string(),
+    Ok(Written { reply, detail })
+}
+
+/// The refusals of a feature's, a project's or an agent's restart.
+fn refusal(action: &str, e: &PmError) -> Option<(&'static str, String)> {
+    Some(match e {
+        PmError::SafetyCheck(_) if action.starts_with("restart") => ("mid-turn", e.to_string()),
+        PmError::SafetyCheck(_) => ("unsafe", e.to_string()),
+        PmError::Unsafe { reason, remote, .. } => ("unsafe", format!("{reason} {remote}")),
+        PmError::MergeAborted(_) => ("conflict", e.to_string()),
+        _ => return None,
     })
 }
 

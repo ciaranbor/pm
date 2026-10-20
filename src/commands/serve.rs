@@ -53,6 +53,7 @@ use crate::state::serve_files::ServeFiles;
 use super::attention::{self, transition::Watch};
 use super::reexec::Binary;
 
+mod agents;
 mod dialog;
 mod docs;
 mod events;

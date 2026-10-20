@@ -44,6 +44,56 @@ sealed interface Action {
         override val verb = "Restart"
     }
 
+    /**
+     * `pm agent spawn`: adds `agent` to the scope, or, registered already (`existing`), starts it
+     * or sends it the context. `definition` null launches the agent's own.
+     */
+    data class Spawn(
+        override val project: String,
+        val scope: String,
+        val agent: String,
+        val definition: String? = null,
+        val context: String? = null,
+        val existing: Boolean = false,
+    ) : Action {
+        override val subject = agent
+        override val verb = "Add"
+    }
+
+    /** A spawn of a stopped or dead agent with nothing else: it starts on its conversation. */
+    data class Start(override val project: String, val scope: String, val agent: String) : Action {
+        override val subject = agent
+        override val verb = "Start"
+    }
+
+    /** `working`: whether the agent is busy, asking, or waiting on background work. */
+    data class Stop(
+        override val project: String,
+        val scope: String,
+        val agent: String,
+        val working: Boolean = false,
+    ) : Action {
+        override val subject = agent
+        override val verb = "Stop"
+    }
+
+    data class DeleteAgent(override val project: String, val scope: String, val agent: String) :
+        Action {
+        override val subject = agent
+        override val verb = "Delete"
+    }
+
+    /** A new agent `name` starting on a copy of `source`'s conversation. */
+    data class Fork(
+        override val project: String,
+        val scope: String,
+        val source: String,
+        val name: String,
+    ) : Action {
+        override val subject = source
+        override val verb = "Fork"
+    }
+
     data class OpenProject(override val project: String) : Action {
         override val subject = project
         override val verb = "Open"
@@ -72,9 +122,27 @@ val Action.removes: Pair<String, String>?
             is Action.Delete -> project to feature
             is Action.DeleteProject -> project to Snapshot.MAIN
             is Action.Restart,
+            is Action.Spawn,
+            is Action.Start,
+            is Action.Stop,
+            is Action.DeleteAgent,
+            is Action.Fork,
             is Action.OpenProject,
             is Action.CloseProject -> null
         }
+
+/** The agent an action that went through puts on screen, as project, scope and agent. */
+val Action.shows: Triple<String, String, String>?
+    get() =
+        when (this) {
+            is Action.Spawn -> Triple(project, scope, agent)
+            is Action.Start -> Triple(project, scope, agent)
+            is Action.Fork -> Triple(project, scope, name)
+            else -> null
+        }
+
+/** An action that went through, and what it did in words for the snackbar. */
+data class Finished(val action: Action, val said: String = action.done)
 
 /** Where an action stands. */
 sealed interface ActionState {
@@ -117,16 +185,22 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
     private val _state = MutableStateFlow<ActionState>(ActionState.Idle)
     val state: StateFlow<ActionState> = _state.asStateFlow()
 
-    private val _finished = Channel<Action>(Channel.BUFFERED)
+    private val _finished = Channel<Finished>(Channel.BUFFERED)
 
     /** Each action that went through, once. */
-    val finished: Flow<Action> = _finished.receiveAsFlow()
+    val finished: Flow<Finished> = _finished.receiveAsFlow()
 
-    /** Start `action` from its menu: a restart or an open runs at once, the rest ask first. */
+    /**
+     * Start `action` from its menu or form: a restart, an open, and what a form asked for run at
+     * once; the rest ask first.
+     */
     fun ask(action: Action) {
         if (_state.value is ActionState.Running) return
         when (action) {
             is Action.Restart,
+            is Action.Spawn,
+            is Action.Start,
+            is Action.Fork,
             is Action.OpenProject -> run(action)
             else -> _state.value = ActionState.Confirming(action)
         }
@@ -146,6 +220,7 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
         scope.launch {
             _state.value =
                 try {
+                    var said = action.done
                     val warnings =
                         when (action) {
                             is Action.Merge -> client.merge(action.project, action.feature)
@@ -159,6 +234,47 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
                                 )
                                 emptyList()
                             }
+                            is Action.Spawn -> {
+                                val outcome =
+                                    client.spawn(
+                                        action.project,
+                                        action.scope,
+                                        action.agent,
+                                        action.definition,
+                                        action.context,
+                                    )
+                                val sent =
+                                    if (action.context != null) "; sent it the context" else ""
+                                said =
+                                    when (outcome) {
+                                        ALREADY_ACTIVE -> "${action.agent} was already running$sent"
+                                        else ->
+                                            if (action.existing) "Started ${action.agent}$sent"
+                                            else said
+                                    }
+                                emptyList()
+                            }
+                            is Action.Start -> {
+                                client.spawn(action.project, action.scope, action.agent)
+                                emptyList()
+                            }
+                            is Action.Stop -> {
+                                client.stop(action.project, action.scope, action.agent)
+                                emptyList()
+                            }
+                            is Action.DeleteAgent -> {
+                                client.deleteAgent(action.project, action.scope, action.agent)
+                                emptyList()
+                            }
+                            is Action.Fork -> {
+                                client.fork(
+                                    action.project,
+                                    action.scope,
+                                    action.source,
+                                    action.name,
+                                )
+                                emptyList()
+                            }
                             is Action.OpenProject -> client.openProject(action.project)
                             is Action.CloseProject -> {
                                 client.closeProject(action.project)
@@ -166,7 +282,7 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
                             }
                             is Action.DeleteProject -> client.deleteProject(action.project)
                         }
-                    _finished.send(action)
+                    _finished.send(Finished(action, said))
                     if (warnings.isEmpty()) ActionState.Idle
                     else ActionState.Warned(action, warnings)
                 } catch (e: CancellationException) {
@@ -187,6 +303,7 @@ class Lifecycle(private val scope: CoroutineScope, private val client: () -> PmC
 
     companion object {
         const val MID_TURN = "mid-turn"
+        const val ALREADY_ACTIVE = "already-active"
         const val UNREACHABLE =
             "pm serve stopped answering, so it isn't known whether this went through. " +
                 "The app shows the outcome once it reconnects."

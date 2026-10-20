@@ -23,6 +23,9 @@ use serde::{Deserialize, Serialize};
 use crate::error::{PmError, Result};
 use crate::state::paths;
 
+mod definitions;
+pub use definitions::{Definition, list_definitions};
+
 /// Reserved agent name meaning a definition-less vanilla harness session.
 /// Unconditional: even if a `default.md` definition file exists, this name
 /// spawns with no definition flag. Validation skips the definition-file
@@ -328,19 +331,31 @@ pub fn list_installed_in(
 /// callers resolving a definition report the same paths the validator checks.
 pub fn definition_paths(project_root: &Path, agent: &str, home: Option<&Path>) -> Vec<PathBuf> {
     let filename = format!("{agent}.md");
-    let main = paths::main_worktree(project_root);
-    vec![
-        main.join(".agents/agents").join(&filename),
+    definition_stores(project_root, home)
+        .into_iter()
+        .map(|store| store.join(&filename))
+        .collect()
+}
+
+/// The directories [`definition_paths`] looks in, in its order; the global
+/// one is the `~/…` placeholder when `home` is `None`.
+fn definition_stores(project_root: &Path, home: Option<&Path>) -> [PathBuf; 2] {
+    [
+        paths::main_worktree(project_root).join(".agents/agents"),
         match home {
-            Some(h) => global_definition_path(h, agent),
-            None => PathBuf::from("~/.agents/agents").join(&filename),
+            Some(h) => global_store(h),
+            None => PathBuf::from("~/.agents/agents"),
         },
     ]
 }
 
+fn global_store(home: &Path) -> PathBuf {
+    home.join(".agents/agents")
+}
+
 /// Where agent definition `agent` lives in the global tier under `home`.
 pub fn global_definition_path(home: &Path, agent: &str) -> PathBuf {
-    home.join(".agents/agents").join(format!("{agent}.md"))
+    global_store(home).join(format!("{agent}.md"))
 }
 
 /// The body of the first definition file found at [`definition_paths`],
@@ -362,13 +377,14 @@ pub fn definition_body(
 
 /// `content` after a leading `---` … `---` block, if any.
 fn strip_front_matter(content: &str) -> &str {
-    let Some(rest) = content.strip_prefix("---\n") else {
-        return content;
-    };
-    match rest.find("\n---\n") {
-        Some(end) => rest[end + 5..].trim_start_matches('\n'),
-        None => content,
-    }
+    front_matter(content).map_or(content, |(_, body)| body)
+}
+
+/// A leading `---` … `---` block of `content`, and what follows it.
+fn front_matter(content: &str) -> Option<(&str, &str)> {
+    let rest = content.strip_prefix("---\n")?;
+    let end = rest.find("\n---\n")?;
+    Some((&rest[..end], rest[end + 5..].trim_start_matches('\n')))
 }
 
 /// True iff an agent definition file exists at any of [`definition_paths`].

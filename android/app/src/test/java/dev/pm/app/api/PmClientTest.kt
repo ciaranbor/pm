@@ -317,4 +317,26 @@ class PmClientTest {
         assertEquals("/v1/projects/app/close", server.takeRequest().url.encodedPath)
         assertEquals("/v1/projects/app/delete", server.takeRequest().url.encodedPath)
     }
+
+    @Test
+    fun definitions_decode_with_their_optional_fields_absent() = runBlocking {
+        reply(
+            200,
+            """{"definitions":[
+                {"name":"plain","description":"no definition: a vanilla session",
+                 "harness":"claude-code","model":null},
+                {"name":"reviewer","description":null,"harness":"codex","model":"gpt-5"},
+                {"name":"broken","harness":null,"model":null,"error":"harness 'x' is not supported"}
+            ]}""",
+        )
+
+        val listed = client.definitions("app")
+
+        assertEquals("/v1/projects/app/definitions", server.takeRequest().url.encodedPath)
+        assertEquals(
+            listOf("claude-code", "codex · gpt-5", "harness 'x' is not supported"),
+            listed.map { it.launches },
+        )
+        assertNull(listed[1].description)
+    }
 }

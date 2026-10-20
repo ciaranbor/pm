@@ -188,6 +188,10 @@ pub enum PmError {
     #[error("Agent definition not found: {0}")]
     AgentNotFound(String),
 
+    /// `pm agent fork` refused before it spawned anything.
+    #[error("Agent error: {0}")]
+    Unforkable(String),
+
     #[error(
         "No agent definition '{agent}' found at {}. \
          Pass --agent with an installed definition, or install the definition file.",
@@ -267,7 +271,7 @@ impl PmError {
     /// report that frames it itself.
     pub fn reason(self) -> String {
         match self {
-            PmError::Agent(message) => message,
+            PmError::Agent(message) | PmError::Unforkable(message) => message,
             e => e.to_string(),
         }
     }

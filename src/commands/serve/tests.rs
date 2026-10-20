@@ -1,6 +1,7 @@
 //! The `pm serve` API end to end, one module per endpoint group; the
 //! fixture, clients and transcript builders they share live here.
 
+mod agents;
 mod devices;
 mod dialog;
 mod events;
