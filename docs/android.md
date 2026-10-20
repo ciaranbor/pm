@@ -73,6 +73,22 @@ Merge button sits at the bottom. A feature with no agents running opens
 straight on its page. Merge, Delete, and the shown agent's terminal and
 restart are in the chat's ⋮ menu.
 
+## Agents
+
+The chat's ⋮ menu also acts on the shown agent: Stop while its session is
+up, Start once it is stopped or dead (the CLI's spawn, which heals a dead
+one), Fork, which asks for the new agent's name, and Delete; Stop and
+Delete ask first.
+
+Add agent is in the same menu and on a scope with no agents. It lists the
+definitions the server has, each with the harness and model config gives
+it; the phone can't change them. It takes a name, the definition's by
+default, and an optional context. A name that is already an agent's is
+that agent, as `pm agent spawn` treats it: it is started if stopped, on its
+own definition, and sent the context. Start, Fork and Add agent are
+hidden while the scope's session is down; Open the project first. The
+agent added, started or forked is then shown.
+
 A feature's Merge is off while merging would not land its branch as it
 stands, with the reason under the menu's Merge, and on the feature's page
 under where it stands, or above its Merge button once it is ready:

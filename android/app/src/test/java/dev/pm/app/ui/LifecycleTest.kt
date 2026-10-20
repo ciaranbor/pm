@@ -165,4 +165,80 @@ class LifecycleTest {
         assertEquals(ActionState.Failed(delete, refusal), lifecycle.state.value)
         assertEquals("/v1/projects/app/delete", server.takeRequest().url.encodedPath)
     }
+
+    @Test
+    fun a_spawn_and_a_start_run_at_once_and_an_agent_already_running_says_so() = runTest {
+        val lifecycle = Lifecycle(backgroundScope) { client }
+        val spawn = Action.Spawn("app", "login", "second", "reviewer", "look at login")
+        val start = Action.Start("app", "login", "implementer")
+        reply(200, """{"spawned":"Agent 'second' already active","outcome":"already-active"}""")
+        val finished = mutableListOf<Finished>()
+        backgroundScope.launch { lifecycle.finished.collect { finished += it } }
+
+        lifecycle.ask(spawn)
+        eventually { finished.size == 1 }
+        assertEquals(
+            Finished(spawn, "second was already running; sent it the context"),
+            finished[0],
+        )
+        val spawned = server.takeRequest()
+        assertEquals("/v1/agents/app/login/second/spawn", spawned.url.encodedPath)
+        assertEquals(
+            """{"definition":"reviewer","context":"look at login"}""",
+            spawned.body?.utf8(),
+        )
+
+        val restarted = spawn.copy(agent = "implementer", definition = null, existing = true)
+        reply(200, """{"spawned":"Spawned agent 'implementer'","outcome":"spawned"}""")
+        lifecycle.ask(restarted)
+        eventually { finished.size == 2 }
+        assertEquals(
+            Finished(restarted, "Started implementer; sent it the context"),
+            finished[1],
+        )
+        server.takeRequest()
+
+        reply(200, """{"spawned":"Resumed agent 'implementer'","outcome":"resumed"}""")
+        lifecycle.ask(start)
+        eventually { finished.size == 3 }
+        assertEquals(Finished(start, "Started implementer"), finished[2])
+        val started = server.takeRequest()
+        assertEquals("/v1/agents/app/login/implementer/spawn", started.url.encodedPath)
+        assertEquals("{}", started.body?.utf8())
+    }
+
+    @Test
+    fun a_stop_and_an_agents_delete_wait_for_confirmation() = runTest {
+        val lifecycle = Lifecycle(backgroundScope) { client }
+        val stop = Action.Stop("app", "login", "implementer", working = true)
+        val delete = Action.DeleteAgent("app", "login", "implementer")
+        reply(200, """{"stopped":"Stopped agent 'implementer' in login"}""")
+        reply(200, """{"deleted":"Deleted agent 'implementer' from login"}""")
+
+        for ((action, path) in listOf(stop to "stop", delete to "delete")) {
+            lifecycle.ask(action)
+            assertEquals(ActionState.Confirming(action), lifecycle.state.value)
+            lifecycle.confirm()
+            eventually { lifecycle.state.value == ActionState.Idle }
+            assertEquals(
+                "/v1/agents/app/login/implementer/$path",
+                server.takeRequest().url.encodedPath,
+            )
+        }
+    }
+
+    @Test
+    fun a_fork_onto_a_taken_name_fails_in_the_servers_words() = runTest {
+        val lifecycle = Lifecycle(backgroundScope) { client }
+        val fork = Action.Fork("app", "login", "implementer", "reviewer")
+        val refusal = "agent 'reviewer' already exists in scope 'login'"
+        reply(409, """{"error":"$refusal","refused":"fork"}""")
+
+        lifecycle.ask(fork)
+        eventually { lifecycle.state.value is ActionState.Failed }
+        assertEquals(ActionState.Failed(fork, refusal), lifecycle.state.value)
+        val sent = server.takeRequest()
+        assertEquals("/v1/agents/app/login/implementer/fork", sent.url.encodedPath)
+        assertEquals("""{"name":"reviewer"}""", sent.body?.utf8())
+    }
 }

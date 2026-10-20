@@ -146,6 +146,14 @@ internal fun NavBackStack<NavKey>.leave(project: String, scope: String) {
     if (isEmpty()) add(Route.Home)
 }
 
+/** Show `agent` on each of the stack's workspaces of `scope` in `project`. */
+internal fun NavBackStack<NavKey>.show(project: String, scope: String, agent: String) {
+    for (i in indices) {
+        val shown = this[i] as? Route.Scope ?: continue
+        if (shown.project == project && shown.scope == scope) this[i] = shown.copy(agent = agent)
+    }
+}
+
 /** Whether this scope's going takes `other` with it: itself, or any of a project's when `main`. */
 internal fun kotlin.Pair<String, String>.covers(other: kotlin.Pair<String, String>): Boolean =
     this == other || (second == Snapshot.MAIN && first == other.first)

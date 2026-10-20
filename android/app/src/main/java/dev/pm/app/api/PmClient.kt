@@ -1,5 +1,6 @@
 package dev.pm.app.api
 
+import dev.pm.app.model.AgentDefinition
 import dev.pm.app.model.Dialog
 import dev.pm.app.model.DialogAnswer
 import dev.pm.app.model.DocCategory
@@ -411,6 +412,64 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
         )
     }
 
+    /** Every agent definition a spawn in the project can name, `plain` first. */
+    suspend fun definitions(project: String): List<AgentDefinition> =
+        json
+            .decodeFromString(
+                DefinitionList.serializer(),
+                get(url("projects", project, "definitions")),
+            )
+            .definitions
+
+    /**
+     * `pm agent spawn`: add the agent, or, registered already, start it or send it the context.
+     * Refused with `no-session` while the scope's session is down, `definition` when the definition
+     * doesn't resolve. Returns the outcome: `spawned`, `resumed` or `already-active`.
+     */
+    suspend fun spawn(
+        project: String,
+        scope: String,
+        agent: String,
+        definition: String? = null,
+        context: String? = null,
+    ): String =
+        json
+            .decodeFromString(
+                Spawned.serializer(),
+                send(
+                    postRequest(
+                        url("agents", project, scope, agent, "spawn"),
+                        json.encodeToString(SpawnBody.serializer(), SpawnBody(definition, context)),
+                    ),
+                    lifecycle,
+                ),
+            )
+            .outcome
+
+    /** `pm agent stop`: end the agent's session; a spawn starts it again on its conversation. */
+    suspend fun stop(project: String, scope: String, agent: String) {
+        send(postRequest(url("agents", project, scope, agent, "stop"), "{}"), lifecycle)
+    }
+
+    /** `pm agent delete`: forget the agent, its queued messages and its window. */
+    suspend fun deleteAgent(project: String, scope: String, agent: String) {
+        send(postRequest(url("agents", project, scope, agent, "delete"), "{}"), lifecycle)
+    }
+
+    /**
+     * `pm agent fork`: a new agent `name` on a copy of `source`'s conversation. Refused with `fork`
+     * when `source` has none to copy, its harness changed, or `name` is taken.
+     */
+    suspend fun fork(project: String, scope: String, source: String, name: String) {
+        send(
+            postRequest(
+                url("agents", project, scope, source, "fork"),
+                json.encodeToString(ForkBody.serializer(), ForkBody(name)),
+            ),
+            lifecycle,
+        )
+    }
+
     /** The server's VAPID public key, which push subscriptions are made against. */
     suspend fun vapidKey(): String =
         json
@@ -546,6 +605,15 @@ class PmClient(private val pairing: Pairing, base: OkHttpClient = OkHttpClient()
     @Serializable private data class ModeBody(val mode: String)
 
     @Serializable private data class RestartBody(val force: Boolean)
+
+    @Serializable
+    private data class SpawnBody(val definition: String? = null, val context: String? = null)
+
+    @Serializable private data class Spawned(val outcome: String = "")
+
+    @Serializable private data class ForkBody(val name: String)
+
+    @Serializable private data class DefinitionList(val definitions: List<AgentDefinition>)
 
     @Serializable private data class Keys(val p256dh: String, val auth: String)
 

@@ -3,6 +3,7 @@ package dev.pm.app.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -13,11 +14,13 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.lifecycle.Lifecycle
@@ -114,6 +117,7 @@ internal fun FeatureScreen(
     mergeBlocker: String?,
     ask: (Action) -> Unit,
     modifier: Modifier = Modifier,
+    addAgent: (() -> Unit)? = null,
 ) {
     val merge = Action.Merge(project, name)
     FeaturePage(
@@ -127,6 +131,7 @@ internal fun FeatureScreen(
         merge = { ask(merge) },
         modifier = modifier,
         mergeBlocker = mergeBlocker,
+        addAgent = addAgent,
     ) { shown ->
         when (shown) {
             Page.Summary ->
@@ -147,7 +152,8 @@ private fun infoModel(client: PmClient?, project: String, feature: String): Read
  * Where a feature stands, then a choice of its pages, `page` shown by `content`; a ready feature's
  * Merge, its next step, below whichever. `merging` while this feature's merge runs; `busy` while
  * any action does. A `mergeBlocker` turns Merge off and says why: above a ready feature's Merge,
- * else under where the feature stands.
+ * else under where the feature stands. With `addAgent`, the feature has no agents, and a button
+ * under where it stands adds one.
  */
 @Composable
 fun FeaturePage(
@@ -161,11 +167,26 @@ fun FeaturePage(
     merge: () -> Unit,
     modifier: Modifier = Modifier,
     mergeBlocker: String? = null,
+    addAgent: (() -> Unit)? = null,
     content: @Composable (Page) -> Unit,
 ) {
     val pages = rememberSaveableStateHolder()
     Column(modifier.fillMaxSize()) {
         if (feature != null) StatusHeader(feature, now, stale)
+        if (addAgent != null) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = Spacing.gutter, end = Spacing.xs),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "No agents are running here.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(onClick = addAgent) { Text("Add agent") }
+            }
+        }
         if (feature != null && !isReady(feature) && mergeBlocker != null) {
             Text(
                 "Can't merge: ${mergeBlocker.replaceFirstChar { it.lowercase() }}",
@@ -219,15 +240,20 @@ fun FeaturePage(
     }
 }
 
-/** A feature page's top bar: Merge while the feature isn't ready (its page has it then), Delete. */
+/**
+ * A feature page's top bar: Add agent with `addAgent`, Merge while the feature isn't ready (its
+ * page has it then), Delete.
+ */
 @Composable
 internal fun FeatureActions(
     topBar: TopBarSlot,
     feature: FeatureSnapshot,
     mergeBlocker: String?,
     ask: (Action) -> Unit,
+    addAgent: (() -> Unit)? = null,
 ) {
     val items = buildList {
+        addAgent?.let { add(MenuItem("Add agent…", R.drawable.ic_add) { it() }) }
         if (!isReady(feature)) add(mergeItem(feature, mergeBlocker, ask))
         add(deleteItem(feature, ask))
     }

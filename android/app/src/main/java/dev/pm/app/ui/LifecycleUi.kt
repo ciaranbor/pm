@@ -112,6 +112,11 @@ private val Action.running: String
             is Action.Merge -> "Merging"
             is Action.Delete -> "Deleting"
             is Action.Restart -> "Restarting"
+            is Action.Spawn -> "Adding"
+            is Action.Start -> "Starting"
+            is Action.Stop -> "Stopping"
+            is Action.DeleteAgent -> "Deleting"
+            is Action.Fork -> "Forking"
             is Action.OpenProject -> "Opening"
             is Action.CloseProject -> "Closing"
             is Action.DeleteProject -> "Deleting"
@@ -124,6 +129,11 @@ val Action.done: String
             is Action.Merge -> "Merged $feature"
             is Action.Delete -> "Deleted $feature"
             is Action.Restart -> "Restarted $agent"
+            is Action.Spawn -> "Added $agent"
+            is Action.Start -> "Started $agent"
+            is Action.Stop -> "Stopped $agent"
+            is Action.DeleteAgent -> "Deleted $agent"
+            is Action.Fork -> "Forked $source as $name"
             is Action.OpenProject -> "Opened $project"
             is Action.CloseProject -> "Closed $project"
             is Action.DeleteProject -> "Deleted $project"
@@ -223,6 +233,24 @@ private fun Confirmation(
                         "work. Restarting interrupts it; once back, it is told to resume.",
                     "Restart anyway",
                 )
+            is Action.Stop ->
+                Triple(
+                    "Stop ${action.agent}?",
+                    "Ends ${action.agent}'s session. Start brings it back on the same " +
+                        "conversation." +
+                        if (action.working)
+                            "\n\n${action.agent} is working, asking, or waiting on background " +
+                                "work; stopping interrupts it."
+                        else "",
+                    "Stop",
+                )
+            is Action.DeleteAgent ->
+                Triple(
+                    "Delete ${action.agent}?",
+                    "Deletes ${action.agent}: its registry entry, queued messages and window. " +
+                        "Its conversation stays in its harness but pm can't resume it.",
+                    "Delete",
+                )
             is Action.CloseProject ->
                 Triple(
                     "Close ${action.project}?",
@@ -246,6 +274,9 @@ private fun Confirmation(
                         "pm refuses while a feature holds uncommitted, unmerged or unpushed work.",
                     "Delete",
                 )
+            is Action.Spawn,
+            is Action.Start,
+            is Action.Fork,
             is Action.OpenProject -> return
         }
     val destructive = action !is Action.Merge

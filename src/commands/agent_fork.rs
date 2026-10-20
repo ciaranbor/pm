@@ -20,6 +20,7 @@ use super::agent_spawn::{SpawnParams, notes_suffix, spawn_session};
 /// the source's conversation history.
 ///
 /// Errors if:
+/// - the scope's tmux session is not running
 /// - `source` does not exist in the registry
 /// - `source` has no `session_id`, or its harness has no conversation for
 ///   it (a session that never took a turn): nothing to fork from
@@ -35,10 +36,13 @@ pub fn agent_fork(
     crate::messages::validate_name(new_name, "agent")?;
 
     if source == new_name {
-        return Err(PmError::Agent(format!(
+        return Err(PmError::Unforkable(format!(
             "source and new agent names must differ ('{source}')"
         )));
     }
+
+    let config = ProjectConfig::load(&paths::pm_dir(project_root))?;
+    super::agent_spawn::require_session(&config.project.name, feature, tmux_server)?;
 
     let agents_dir = paths::agents_dir(project_root);
     let registry = AgentRegistry::load(&agents_dir, feature)?;
@@ -46,13 +50,13 @@ pub fn agent_fork(
     let source_entry = registry.require(source, feature)?;
 
     if source_entry.session_id.is_empty() {
-        return Err(PmError::Agent(format!(
+        return Err(PmError::Unforkable(format!(
             "agent '{source}' has no session_id to fork from"
         )));
     }
 
     if registry.get(new_name).is_some() {
-        return Err(PmError::Agent(format!(
+        return Err(PmError::Unforkable(format!(
             "agent '{new_name}' already exists in scope '{feature}'"
         )));
     }
@@ -75,7 +79,6 @@ pub fn agent_fork(
 
     // The source's transcript only exists on the harness that wrote it; a
     // fork onto a different harness would be a fresh agent, not a fork.
-    let config = ProjectConfig::load(&paths::pm_dir(project_root))?;
     let global = GlobalConfig::load_or_default();
     let harness = super::agent_spawn::configured_harness(
         &inherited_definition,
@@ -83,7 +86,7 @@ pub fn agent_fork(
         &global.agents,
     )?;
     if harness != source_entry.harness {
-        return Err(PmError::Agent(format!(
+        return Err(PmError::Unforkable(format!(
             "agent '{source}' ran on harness {}, but config now selects {harness} for \
              '{inherited_definition}' — its session cannot be forked across harnesses",
             source_entry.harness
@@ -95,7 +98,7 @@ pub fn agent_fork(
             .conversation(project_root, feature, source)?
             .is_none()
     {
-        return Err(PmError::Agent(format!(
+        return Err(PmError::Unforkable(format!(
             "agent '{source}' has no conversation to fork: {harness} has none for session {} \
              (it never took a turn); spawn a new agent instead",
             source_entry.session_id
@@ -291,7 +294,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            PmError::Agent(
+            PmError::Unforkable(
                 "agent 'reviewer' has no conversation to fork: claude-code has none for session \
                  sess-unturned (it never took a turn); spawn a new agent instead"
                     .into()
@@ -305,6 +308,25 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn fork_refuses_while_the_scopes_session_is_down() {
+        let server = TestServer::new();
+        let dir = tempdir().unwrap();
+        let (session_name, feature) = setup_project(dir.path(), &server);
+        tmux::kill_session(server.name(), &session_name).unwrap();
+
+        let err = agent_fork(
+            dir.path(),
+            &feature,
+            "reviewer",
+            "reviewer-2",
+            server.name(),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, PmError::SessionNotRunning { .. }), "{err}");
     }
 
     #[test]

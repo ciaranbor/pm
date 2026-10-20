@@ -124,9 +124,10 @@ fun App(
     val fullName = rememberTooltipState(isPersistent = true)
     LaunchedEffect(top) { fullName.dismiss() }
     LaunchedEffect(model) {
-        model.lifecycle.finished.collect { action ->
+        model.lifecycle.finished.collect { (action, said) ->
             action.removes?.let { (project, scope) -> backStack.leave(project, scope) }
-            feedback.done(action.done)
+            action.shows?.let { (project, scope, agent) -> backStack.show(project, scope, agent) }
+            feedback.done(said)
         }
     }
     val seen = remember { mutableSetOf<kotlin.Pair<String, String>>() }

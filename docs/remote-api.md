@@ -31,7 +31,7 @@ request and ends its event streams at once; a request already being
 answered, such as a merge, runs to its end. pm does not rely on Tailscale's
 identity headers: a tagged device sends none. `pm serve` logs each request
 with its device to stderr — for input, the keys pressed or the SHA-256 of
-the text, for a dialog's answer its choice, never the text — which the LaunchAgent sends to `serve.log`
+the text (a spawn's context too), for a dialog's answer its choice, never the text — which the LaunchAgent sends to `serve.log`
 (`pm serve logs`) in the `serve/` dir of pm's state dir, beside the devices
 file and the server's VAPID key (`vapid.pem`); `pm state` syncs none of
 them ([Where pm keeps its files](../README.md#where-pm-keeps-its-files)).
@@ -82,6 +82,7 @@ The API is under `/v1`; every path needs a paired device's token:
 | `features/{project}/{feature}/summary` | the feature's summary, Markdown |
 | `projects/{project}/notes` | `GET`: the project's [notes](../README.md#project-notes), Markdown (empty when there are none), with their version as the `ETag`; `PUT` the new Markdown with `If-Match: <that ETag>` (up to 256 KB; longer notes, which only `pm notes` can write, get `413`): `{"version"}`, the new `ETag`, or `409` with `{"error", "refused": "changed", "text", "version"}` (the notes as they are now) when they changed since; `428` without `If-Match` |
 | `projects/{project}/docs` | `GET`: `{"docs": [{"filename", "description", "size", "modified"}, …]}`, the categories of the project's [information store](../README.md#information-store-and-summaries) as its `categories.toml` lists them, in its order, less any that is a link out of `.pm/docs/`; `size` in bytes (0 and `modified` `null` for a file not written yet). Read-only |
+| `projects/{project}/definitions` | `GET`: `{"definitions": [{"name", "description", "harness", "model"}, …]}`, every agent definition a spawn can name: `plain` (no definition) first, then the project's and the global store's, the project's shadowing a global one of the same name, sorted. `description` is the front matter's (`null` without one); `harness` and `model` are what config gives a spawn of it now (`model` `null` when unset), or, when config can't resolve them, both `null` with an `error`. Read-only: a spawn takes no override |
 | `projects/{project}/docs/{filename}` | `GET`: a listed category's doc, Markdown (empty when not written yet); a filename `categories.toml` doesn't list is `404`, so nothing else under `.pm/` is served |
 | `agents/{project}/{scope}/{agent}/screen` | what the agent's pane shows now, plain text, row for row; the app's terminal sheet reads it to answer a dialog with `keys` and `type` |
 | `agents/{project}/{scope}/{agent}/transcript?before={cursor}&limit={n}` | the agent's conversation, a page back from `before` (the end when absent); `limit` 1–200, default 50 |
@@ -98,6 +99,10 @@ The API is under `/v1`; every path needs a paired device's token:
 | `features/{project}/{feature}/merge` | `GET`: `{"mergeable", "reason"}`, whether a merge would land the branch as it stands, checked in git as asked; `reason` (`null` when mergeable) is a few words for a button: what `pm feat merge` would refuse (uncommitted changes, a merge or rebase paused in the feature's or its base's worktree, a base with no checkout), or `Behind <base>: rebase first` when the branch doesn't contain its base, which `pm feat merge` would join with a merge commit nobody reviewed. `POST`: `pm feat merge`, so merges and deletes the feature; `{"merged": true, "warnings"}` |
 | `features/{project}/{feature}/delete` | `POST`: `pm feat delete`; `{"deleted": true, "warnings"}` |
 | `agents/{project}/{scope}/{agent}/restart` | `POST {"force"?}`: `pm agent restart`; `{"restarted": <what it did>}` |
+| `agents/{project}/{scope}/{agent}/spawn` | `POST {"definition"?, "context"?}` (context up to 128 KB): `pm agent spawn <agent> [--agent <definition>] [--context <context>]`; `{"spawned": <what it did>, "outcome": "spawned" \| "resumed" \| "already-active"}`. An agent already registered is healed or resumed, as the CLI does, so a stopped agent starts with an empty body; an active one only gets the context |
+| `agents/{project}/{scope}/{agent}/stop` | `POST`: `pm agent stop`; `{"stopped": <what it did>}` |
+| `agents/{project}/{scope}/{agent}/delete` | `POST`: `pm agent delete`; `{"deleted": <what it did>}` |
+| `agents/{project}/{scope}/{agent}/fork` | `POST {"name"}`: `pm agent fork <agent> <name>`; `{"forked": <what it did>}` |
 | `projects/{project}/open` | `POST`: `pm open`; `{"opened": true, "sessions", "agents", "warnings"}`, the sessions it made and the agents that came up |
 | `projects/{project}/close` | `POST`: `pm close`; `{"closed": true, "sessions"}`, the sessions it ended |
 | `projects/{project}/delete` | `POST`: `pm delete`; `{"deleted": true, "warnings"}` |
@@ -140,8 +145,13 @@ prints it, but for a way out only a terminal offers (`--force`, a rebase),
 which it names as such: `unsafe` (uncommitted changes, unmerged or unpushed
 commits, a missing base), `conflict` (git could not merge; the merge was
 aborted), `mid-turn` (a busy, asking or background agent: send `"force":
-true` to interrupt it, and it is told to resume). Any other failure is a
-`500` with `{"error"}` and may have come partway: the snapshot shows how far.
+true` to interrupt it, and it is told to resume), `no-session` (the scope's
+session isn't running: open the project), `definition` (the definition
+doesn't resolve), `fork` (the source has no conversation to fork, its
+harness changed, or the new name is taken). A name no agent may take is a
+`400`. Any other failure is a `500` with `{"error"}` and may have come
+partway: the snapshot shows how far; a spawn or fork whose harness didn't
+come up has registered the agent.
 A merge or delete that went through carries `warnings`, what the CLI warns
 of on stderr: untracked files deleted with the worktree, or what of the
 worktree could not be removed; an open's are the features it skipped and

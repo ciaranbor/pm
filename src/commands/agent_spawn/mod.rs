@@ -57,6 +57,23 @@ impl SpawnOutcome {
     }
 }
 
+/// The tmux session of `scope` in `project`, which must be running for a
+/// window to open in it.
+pub(crate) fn require_session(
+    project: &str,
+    scope: &str,
+    tmux_server: Option<&str>,
+) -> Result<String> {
+    let session = tmux::session_name(project, scope);
+    if !tmux::has_session(tmux_server, &session)? {
+        return Err(PmError::SessionNotRunning {
+            session,
+            project: project.to_string(),
+        });
+    }
+    Ok(session)
+}
+
 /// Spawn a named agent in a tmux window within the feature session.
 /// Handles three cases: new agent, already-active agent, and dead-but-resumable agent.
 /// An agent whose harness exited to the shell in its window is dead
@@ -143,13 +160,10 @@ fn spawn_agent(
     let agents_dir = paths::agents_dir(project_root);
     let config = ProjectConfig::load(&pm_dir)?;
     let global = GlobalConfig::load_or_default();
-    let session_name = tmux::session_name(&config.project.name, feature);
-    if pane.is_none() && !tmux::has_session(tmux_server, &session_name)? {
-        return Err(PmError::SessionNotRunning {
-            session: session_name,
-            project: config.project.name,
-        });
-    }
+    let session_name = match pane {
+        Some(_) => tmux::session_name(&config.project.name, feature),
+        None => require_session(&config.project.name, feature, tmux_server)?,
+    };
 
     let registry = AgentRegistry::load(&agents_dir, feature)?;
 

@@ -45,15 +45,16 @@ import kotlinx.coroutines.flow.Flow
 /**
  * One scope's screen: a tab per agent once there are two, and the chat of the route's agent. It
  * shows the route's agent: `select` puts another in the route, as it does the one the scope most
- * needs looked at when the route names none. A feature's ⓘ calls `openFeature`, as does its ready
- * strip; a feature without agents shows its page here instead.
+ * needs looked at when the route names none, or names one the snapshot had and has no longer. A
+ * feature's ⓘ calls `openFeature`, as does its ready strip; a feature without agents shows its page
+ * here instead.
  */
 @Composable
 fun Workspace(
     snapshot: Snapshot,
     client: PmClient?,
     route: Route.Scope,
-    select: (String) -> Unit,
+    select: (String?) -> Unit,
     openFeature: () -> Unit,
     now: Instant,
     networkChanges: Flow<Unit>,
@@ -69,19 +70,59 @@ fun Workspace(
     val feature = snapshot.feature(project, scope)
     val main = snapshot.project(project)?.main?.takeIf { scope == Snapshot.MAIN }
     val agents = snapshot.agents(project, scope)
-    val tabs = tabsOf(agents, route.agent)
+    val names = agents.map { it.name }
+    // The route's agent was deleted once a snapshot has had it since the route named it, and the
+    // latest doesn't: a name just added is kept until a snapshot has it.
+    var arrived by remember(project, scope, route.agent) { mutableStateOf(false) }
+    LaunchedEffect(route.agent, names) { if (route.agent in names) arrived = true }
+    val gone = route.agent?.takeIf { arrived && it !in names }
+    val tabs = tabsOf(agents, route.agent?.takeIf { it != gone })
     val fallback = defaultAgent(feature, main?.attention, agents)
     LaunchedEffect(route.agent == null) { if (route.agent == null) fallback?.let(select) }
+    LaunchedEffect(gone) { if (gone != null) select(fallback) }
     val selected = route.agent?.takeIf { it in tabs } ?: fallback
     val mergeBlocker = feature?.let {
         mergeBlocker(client, project, scope, it, acting, recheck = selected == null)
     }
+    val running = feature?.sessionExists ?: main?.sessionExists ?: false
+    var adding by rememberSaveable { mutableStateOf(false) }
+    var forking by rememberSaveable { mutableStateOf<String?>(null) }
+    if (adding && client != null) {
+        AddAgentDialog(
+            client,
+            project,
+            scope,
+            names,
+            submit = {
+                adding = false
+                ask(it)
+            },
+            dismiss = { adding = false },
+        )
+    }
+    forking?.let { source ->
+        ForkDialog(
+            project,
+            scope,
+            source,
+            names,
+            submit = {
+                forking = null
+                ask(it)
+            },
+            dismiss = { forking = null },
+        )
+    }
+    val addAgent = { adding = true }.takeIf { client != null && running }
 
     if (selected == null) {
-        if (feature == null) EmptyState("No agents here", hint = "Its session isn't running.")
+        if (feature == null)
+            if (addAgent != null)
+                EmptyState("No agents here", action = "Add agent", onAction = addAgent)
+            else EmptyState("No agents here", hint = "Its session isn't running.")
         else {
             var page by rememberSaveable { mutableStateOf(Page.Summary) }
-            FeatureActions(topBar, feature, mergeBlocker, ask)
+            FeatureActions(topBar, feature, mergeBlocker, ask, addAgent)
             FeatureScreen(
                 project,
                 scope,
@@ -95,6 +136,7 @@ fun Workspace(
                 mergeBlocker,
                 ask,
                 modifier,
+                addAgent,
             )
         }
         return
@@ -115,6 +157,7 @@ fun Workspace(
                 Icon(painterResource(R.drawable.ic_info), "Feature info")
             }
         }
+        val state = agents.find { it.name == selected }?.stateOf
         val items = buildList {
             if (client != null) {
                 add(MenuItem("Terminal", R.drawable.ic_terminal) { terminal = selected })
@@ -123,11 +166,20 @@ fun Workspace(
                         ask(Action.Restart(project, scope, selected))
                     }
                 )
+                addAll(agentItems(project, scope, selected, state, running, ask))
+                if (running) {
+                    add(MenuItem("Fork $selected…", R.drawable.ic_fork) { forking = selected })
+                    add(MenuItem("Add agent…", R.drawable.ic_add) { adding = true })
+                }
             }
-            if (feature != null) {
-                add(mergeItem(feature, mergeBlocker, ask))
-                add(deleteItem(feature, ask))
-            }
+            if (feature != null) add(mergeItem(feature, mergeBlocker, ask))
+            if (client != null)
+                add(
+                    MenuItem("Delete $selected", R.drawable.ic_delete, destructive = true) {
+                        ask(Action.DeleteAgent(project, scope, selected))
+                    }
+                )
+            if (feature != null) add(deleteItem(feature, ask))
         }
         ActionMenu(items)
     }
@@ -190,6 +242,42 @@ private fun FollowMode(model: ModeModel, agent: String, state: AgentState?) {
         }
     }
 }
+
+/**
+ * Stop for an agent whose session is up, Start for one stopped or dead while its scope's session
+ * `running`: the CLI's spawn, which heals a dead one.
+ */
+internal fun agentItems(
+    project: String,
+    scope: String,
+    agent: String,
+    state: AgentState?,
+    running: Boolean,
+    ask: (Action) -> Unit,
+): List<MenuItem> =
+    when (state) {
+        AgentState.Stopped,
+        AgentState.Dead ->
+            if (running)
+                listOf(
+                    MenuItem("Start $agent", R.drawable.ic_play_arrow) {
+                        ask(Action.Start(project, scope, agent))
+                    }
+                )
+            else emptyList()
+        AgentState.Closed,
+        null -> emptyList()
+        else ->
+            listOf(
+                MenuItem("Stop $agent", R.drawable.ic_stop) {
+                    val working =
+                        state == AgentState.Busy ||
+                            state == AgentState.Asking ||
+                            state == AgentState.Background
+                    ask(Action.Stop(project, scope, agent, working))
+                }
+            )
+    }
 
 /** The scope's agents, and the route's should the snapshot not have it yet. */
 internal fun tabsOf(agents: List<AgentSnapshot>, asked: String?): List<String> {
