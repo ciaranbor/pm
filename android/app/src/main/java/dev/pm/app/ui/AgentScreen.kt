@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -55,6 +57,7 @@ import dev.pm.app.model.Waiting
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 @Composable
@@ -198,8 +201,9 @@ private fun Chat(model: AgentModel) {
 
 /**
  * The conversation, oldest first, kept at its end while the user is there; scrolled up, a button
- * counts what has come since and goes back down, and another goes to the user's last message. Near
- * the top, or while all of it fits, it asks for `older` items, again after each page arrives.
+ * counts what has come since and goes back down. Another goes back through the user's messages, one
+ * per press. Near the top, or while all of it fits, it asks for `older` items, again after each
+ * page arrives.
  *
  * A tap on a message shows its time, and a long press offers its actions. A tool call, a thought or
  * an event opens in `reader` on a tap; a tool call on a long press too, since only the reader holds
@@ -297,6 +301,7 @@ internal fun ChatView(
                 rows,
                 start,
                 behind = !follow,
+                more = conversation.before != null,
                 unseen = newSince(items, seen),
                 toEnd = { follow = true },
                 modifier = Modifier.align(Alignment.BottomEnd).padding(Spacing.l),
@@ -346,9 +351,10 @@ private fun placed(
 private fun String.isMessage() = this != "start" && !startsWith("day:")
 
 /**
- * The jumps a scrolled chat offers: to the user's last message while it is out of view, with how
- * many rows came after it; and, while `behind`, to the end, with how many are `unseen`. `start` is
- * how many list items come before the rows.
+ * The jumps a scrolled chat offers: back through the user's messages, with how many rows came after
+ * the one it goes to, or, past the oldest one loaded while `more` exist, to the top, where older
+ * items load; and, while `behind`, to the end, with how many are `unseen`. `start` is how many list
+ * items come before the rows.
  */
 @Composable
 private fun Jumps(
@@ -356,27 +362,62 @@ private fun Jumps(
     rows: List<ChatRow>,
     start: Int,
     behind: Boolean,
+    more: Boolean,
     unseen: Int,
     toEnd: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
-    val mine = rows.indexOfLast { (it as? ChatRow.Single)?.item is Item.User }
-    val since = remember(rows, mine) { rowsAfter(rows, mine) }
-    val mineOut by
-        remember(mine, start) {
+    val mine =
+        remember(rows) { rows.indices.filter { (rows[it] as? ChatRow.Single)?.item is Item.User } }
+    var jumped by rememberSaveable { mutableStateOf<String?>(null) }
+    // Where the list was when that jump landed, until it moves; then a walk goes on from there.
+    var landed by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(list) {
+        snapshotFlow { position(list.layoutInfo.shown()) }
+            .collect { if (it != landed) landed = null }
+    }
+    // Back at the end, unless the list is where the last jump left it, a walk starts again from the
+    // user's last message. Once settled there: the end is requested before the list gets there.
+    LaunchedEffect(behind) {
+        if (behind) return@LaunchedEffect
+        snapshotFlow { !list.canScrollForward && !list.isScrollInProgress }.first { it }
+        if (landed == null) jumped = null
+    }
+    val from = remember(rows, jumped) { jumped?.let { key -> rows.indexOfFirst { it.key == key } } }
+    val target by
+        remember(rows, mine, start, more, from) {
             derivedStateOf {
-                mine >= 0 && list.layoutInfo.visibleItemsInfo.none { it.index == mine + start }
+                val shown = list.layoutInfo.shown()
+                val first = (shown.firstOrNull()?.index ?: 0) - start
+                val last = (shown.lastOrNull()?.index ?: -1) - start
+                previousMine(mine, first, last, from.takeIf { landed != null }, jumped != null)
+                    ?: if (more && list.canScrollBackward) OLDER else null
             }
         }
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
-        if (mineOut) {
-            Jump(
-                R.drawable.ic_arrow_upward,
-                "Go to your last message, $since after it",
-                since,
-            ) {
-                scope.launch { list.animateScrollToItem(mine + start) }
+        when (val at = target) {
+            null -> {}
+            OLDER ->
+                Jump(R.drawable.ic_arrow_upward, "Go to older messages", 0) {
+                    landed = null
+                    scope.launch { list.animateScrollToItem(0) }
+                }
+            else -> {
+                val since = rowsAfter(rows, at)
+                val which = if (at == mine.last()) "last" else "earlier"
+                Jump(
+                    R.drawable.ic_arrow_upward,
+                    "Go to your $which message, $since after it",
+                    since,
+                ) {
+                    jumped = rows[at].key
+                    landed = null
+                    scope.launch {
+                        list.animateScrollToItem(at + start)
+                        landed = position(list.layoutInfo.shown())
+                    }
+                }
             }
         }
         if (behind) {
@@ -388,6 +429,34 @@ private fun Jumps(
             )
         }
     }
+}
+
+/** The rows shown. Rows only in the content padding barely show; they don't count as shown. */
+private fun LazyListLayoutInfo.shown(): List<LazyListItemInfo> {
+    val end = viewportEndOffset - afterContentPadding
+    return visibleItemsInfo.filter { it.offset + it.size > 0 && it.offset < end }
+}
+
+/** The first row shown and its offset, to tell whether the list has moved. */
+private fun position(shown: List<LazyListItemInfo>): String? =
+    shown.firstOrNull()?.let { "${it.key}@${it.offset}" }
+
+/**
+ * Where the jump back through the user's messages goes, of `mine`, their rows in order, while rows
+ * `first` to `last` are shown: the one before `from`, the row last jumped to, while that is shown;
+ * else, unless `walking`, their last while it is below what is shown; else the last above what is
+ * shown. Null when there is none.
+ */
+private fun previousMine(
+    mine: List<Int>,
+    first: Int,
+    last: Int,
+    from: Int?,
+    walking: Boolean,
+): Int? {
+    if (from != null && from in first..last) return mine.lastOrNull { it < from }
+    val latest = mine.lastOrNull() ?: return null
+    return if (!walking && latest > last) latest else mine.lastOrNull { it < first }
 }
 
 @Composable
@@ -427,6 +496,9 @@ private suspend fun LazyListState.scrollToEnd() {
 }
 
 private const val MAX_END_STEPS = 50
+
+/** The jump back's target when it goes to the top, where older items load. */
+private const val OLDER = -1
 
 /** How near the top, in rows, the chat asks for older items. */
 private const val PREFETCH = 3
