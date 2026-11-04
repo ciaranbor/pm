@@ -13,6 +13,15 @@ is kept, no longer updated (pm reads the bundled one first), and named by
 `pm update` and `pm doctor` until you move the edits to a project's
 `.pm/workflows/` and delete it. Your own global workflows stay in
 `~/.config/pm/workflows/`.
+- App: add an agent to a project or feature (from the definitions `pm
+serve` lists, with an optional first message), and start, stop, fork or
+delete agents. `pm agent fork` now refuses a scope whose tmux session isn't
+running, as spawn does, instead of failing with a raw tmux error.
+- App: a dialog's card shows the agent's whole question or request.
+- App: the chat's jump button steps back through your earlier messages, one
+per press, and loads older history when it runs out.
+- App: the add, delete, fork, merge, share and close icons use current
+Material Symbols; the close icon's stray spur is gone.
 
 ## 0.7.1 — 2026-10-17
 
