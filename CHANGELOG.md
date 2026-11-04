@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.7.2 — 2026-11-04
+
 - The bundled workflows move from `~/.config/pm/workflows/` to
 `~/.local/share/pm/workflows/` (`$XDG_DATA_HOME/pm`), out of the global
 registry repo. `pm update` deletes the old copies pm wrote; one you edited
