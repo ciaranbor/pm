@@ -36,8 +36,11 @@ fn registered_project(home: &std::path::Path, name: &str) -> std::path::PathBuf 
         repo_url: None,
         state_remote: None,
     }
+    // Resolved as `std_pm`'s binary sees it, with every XDG variable unset.
     .save(
-        &pm::state::paths::dirs_under(home).config.join("projects"),
+        &pm::state::dirs::Dirs::resolve(home, |_| None)
+            .config
+            .join("projects"),
         name,
     )
     .unwrap();
