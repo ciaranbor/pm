@@ -5,20 +5,29 @@
 # emulator's pid and start time; ANDROID_USER_HOME points into the state
 # dir, so the adb key, AVDs and emulator settings never touch ~/.android.
 # Processes are found only through that record and the emulator's process
-# group, never by pattern.
+# group, never by pattern. An instance (AVD ~1.7 GB) lives from `up` to
+# `down`, which deletes it; each `up` first prunes what crashed runs and
+# deleted worktrees left, so leftovers never outlive the next boot.
 set -euo pipefail
 
 usage() {
   cat <<'USAGE'
 Usage: scripts/emulator [-n NAME] COMMAND [ARGS]
 
+  up [--wipe]           boot the instance headless (creating its AVD) and
+                        wait until booted; first prunes stale instances.
+                        It runs until `down`; --wipe boots with fresh user
+                        data (only differs after `down --keep`)
+  down [--keep]         shut it down and delete it: AVD, user data and
+                        record. Run it when done. --keep keeps the AVD, its
+                        installed app and pairing for a later `up`
+  list                  every instance: state, age, creator, stale reason
+  prune                 delete every stale instance: its creator's worktree
+                        is gone (stopping it if running), it crashed, its
+                        `up` was interrupted, or it was stopped without
+                        --keep; AVDs with no record
   setup                 install the emulator and system image into the SDK
                         (sdkmanager) if missing; `up` runs it
-  up [--wipe]           create the AVD if missing, boot it headless and wait
-                        until booted. It runs until `down`; --wipe boots
-                        with fresh user data
-  down                  shut the emulator down and stop its adb server
-  remove                down, then delete the AVD
   status                the instance's pids, ports and boot state
   env                   shell exports pointing plain `adb` at this
                         instance: eval "$(scripts/emulator env)"
@@ -45,7 +54,7 @@ Usage: scripts/emulator [-n NAME] COMMAND [ARGS]
   screenshot FILE       save a PNG of the screen
 
   -n NAME   instance name (default: "default", or $PM_EMULATOR); give each
-            agent its own
+            agent its own, named as its sandbox
 
 The emulator's adb server listens on its own port (never 5037 or 5038), so
 the phone's adb, a forwarded adb server and their devices are untouched;
@@ -79,31 +88,48 @@ if [ "${1:-}" = -n ]; then
   name=$2
   shift 2
 fi
-case $name in
-  *[!A-Za-z0-9_-]*|"") die "invalid instance name '$name' (use [A-Za-z0-9_-])" ;;
-esac
+# "android" would make the instance's dir the AVD home.
+valid_name() {
+  case $1 in *[!A-Za-z0-9_-]*|""|android) return 1 ;; esac
+}
+valid_name "$name" || die "invalid instance name '$name' (use [A-Za-z0-9_-], not 'android')"
 cmd=${1:-}
 [ "$#" -gt 0 ] && shift
 
-dir=$state_root/$name
 android_home=$state_root/android
-avd=pm-$name
+select_instance() {
+  name=$1
+  dir=$state_root/$name
+  avd=pm-$name
+}
+select_instance "$name"
 
 # Everything this script runs sees only this instance's adb.
 export ANDROID_USER_HOME=$android_home ANDROID_EMULATOR_HOME=$android_home
 export ANDROID_AVD_HOME=$android_home/avd ANDROID_HOME=$sdk
 unset ANDROID_SDK_ROOT ANDROID_SERIAL
 
-# The start time of PID, empty if it is not running.
-started() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//' || true; }
+# The start time of PID, empty if it is not running (or a zombie).
+started() { ps -o stat= -o lstart= -p "$1" 2>/dev/null | sed -n 's/^ *[^Z ][^ ]*  *//p' || true; }
 
-field() { sed -n "s/^$1=//p" "$dir/instance" 2>/dev/null || true; }
+# Field KEY of the instance's record: of $snapshot when a caller has
+# taken one, as `up` replaces the record while others read it.
+field() {
+  if [ -n "${snapshot:-}" ]; then sed -n "s/^$1=//p" <<<"$snapshot"
+  else sed -n "s/^$1=//p" "$dir/instance" 2>/dev/null || true
+  fi
+}
+
+# Field KEY of the instance's creation record, empty when absent.
+meta() { sed -n "s/^$1=//p" "$dir/creator" 2>/dev/null || true; }
 
 # Whether the recorded emulator is the process running under its pid.
 running() {
-  local pid
+  local pid now
   pid=$(field pid)
-  [ -n "$pid" ] && [ "$(started "$pid")" = "$(field started)" ]
+  [ -n "$pid" ] || return 1
+  now=$(started "$pid")
+  [ -n "$now" ] && [ "$now" = "$(field started)" ]
 }
 
 load() {
@@ -222,21 +248,11 @@ up() {
     esac
   done
   running && die "instance '$name' is already up ($(field serial)); down first"
-  # What a crashed run left: its helpers and adb server.
-  [ ! -f "$dir/instance" ] || down
   setup
-  mkdir -p "$dir" "$ANDROID_AVD_HOME"
-  create_avd
-  # Ports are picked and recorded under a lock, so concurrent `up`s never
-  # pick the same ones. The lock is a flock held by perl, so the kernel
-  # drops it if the holder dies.
-  perl -MFcntl=:flock -e '
-    open(my $f, ">>", shift) or die "emulator: lock: $!\n";
-    flock($f, LOCK_EX) or die "emulator: lock: $!\n";
-    system(@ARGV) == -1 and die "emulator: $!\n";
-    exit($? & 127 ? 1 : $? >> 8);
-  ' "$state_root/lock" "$self" -n "$name" _claim
+  locked _claim "$$"
   load || die "no ports recorded for '$name'"
+  mkdir -p "$ANDROID_AVD_HOME"
+  create_avd
   # Started first, so the emulator registers with it as it boots.
   eadb start-server >/dev/null 2>&1 || die "cannot start an adb server on port $adb_port"
   log=$dir/emulator.log
@@ -253,13 +269,15 @@ up() {
   TMPDIR=$dir/tmp perl -MPOSIX=setsid -e 'setsid; exec @ARGV or die "emulator: $!\n"' \
     "$sdk/emulator/emulator" "${args[@]}" </dev/null >"$log" 2>&1 &
   pid=$!
+  # Replaced whole, so a concurrent prune never reads it half written.
   printf 'pid=%s\nstarted=%s\nconsole=%s\nadb_port=%s\nserial=%s\n' \
-    "$pid" "$(started "$pid")" "$console" "$adb_port" "$serial" > "$dir/instance"
+    "$pid" "$(started "$pid")" "$console" "$adb_port" "$serial" > "$dir/instance.new"
+  mv "$dir/instance.new" "$dir/instance"
   echo "emulator: booting $serial (pid $pid, adb server port $adb_port, log $log)" >&2
   for (( i = 0; i < boot_timeout; i++ )); do
     if ! running; then
       tail -n 20 "$log" >&2 || true
-      down >/dev/null 2>&1 || true
+      stop >/dev/null 2>&1 || true
       die "the emulator exited while booting (log above)"
     fi
     booted=$(eadb -s "$serial" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') || booted=""
@@ -267,7 +285,7 @@ up() {
     sleep 1
   done
   if [ "$booted" != 1 ]; then
-    down >/dev/null 2>&1 || true
+    stop >/dev/null 2>&1 || true
     die "not booted after ${boot_timeout}s (log: $log)"
   fi
   eadb shell svc power stayon true >/dev/null 2>&1 || true
@@ -285,12 +303,41 @@ exited_within() {
   return 1
 }
 
-down() {
+# Run `$self -n NAME ARGS` holding the state dir's lock: ports are picked
+# and stale instances pruned under it, so concurrent `up`s never pick the
+# same ports or prune one another. The lock is a flock held by perl, so the
+# kernel drops it if the holder dies.
+locked() {
+  mkdir -p "$state_root"
+  perl -MFcntl=:flock -e '
+    open(my $f, ">>", shift) or die "emulator: lock: $!\n";
+    flock($f, LOCK_EX) or die "emulator: lock: $!\n";
+    system(@ARGV) == -1 and die "emulator: $!\n";
+    exit($? & 127 ? 1 : $? >> 8);
+  ' "$state_root/lock" "$self" -n "$name" "$@"
+}
+
+# Under the lock: prune, then record the creator and free ports with OWNER
+# (the `up` process), whose record without a pid is an `up` in flight.
+claim() {
+  local kept
+  prune quiet
+  [ ! -f "$dir/instance" ] || die "instance '$name' is already up or starting"
+  # A kept instance stays kept until a plain `down`, even if this `up` fails.
+  kept=$(meta kept)
+  mkdir -p "$dir"
+  printf 'created=%s\nworktree=%s\nagent=%s\n' "$(date +%s)" "$here" "${PM_AGENT_NAME:-}" \
+    > "$dir/creator"
+  [ "$kept" != 1 ] || echo kept=1 >> "$dir/creator"
+  pick_ports
+  printf 'console=%s\nadb_port=%s\nserial=emulator-%s\nowner=%s\nowner_started=%s\n' \
+    "$console" "$adb_port" "$console" "$1" "$(started "$1")" > "$dir/instance"
+}
+
+# Stop the emulator, its helpers and adb server, keeping the AVD.
+stop() {
   local pid loaded
-  if [ ! -f "$dir/instance" ]; then
-    echo "emulator: no instance '$name'" >&2
-    return 0
-  fi
+  [ -f "$dir/instance" ] || return 0
   loaded=1
   load || loaded=0
   pid=$(field pid)
@@ -310,13 +357,113 @@ down() {
   fi
   [ "$loaded" = 0 ] || eadb kill-server >/dev/null 2>&1 || true
   rm -f "$dir/instance"
-  echo "emulator: '$name' down" >&2
 }
 
-remove() {
-  down
-  rm -rf "${ANDROID_AVD_HOME:?}/$avd.avd" "$ANDROID_AVD_HOME/$avd.ini" "$dir"
-  echo "emulator: '$name' removed" >&2
+# Stop the instance and delete its AVD and record.
+delete() {
+  stop
+  rm -rf "${ANDROID_AVD_HOME:?}/${avd:?}.avd" "$ANDROID_AVD_HOME/$avd.ini" "${dir:?}"
+}
+
+exists() { [ -d "$dir" ] || [ -e "$ANDROID_AVD_HOME/$avd.avd" ] || [ -e "$ANDROID_AVD_HOME/$avd.ini" ]; }
+
+down() {
+  local keep=0
+  while [ "$#" -gt 0 ]; do
+    case $1 in
+      --keep) keep=1; shift ;;
+      *) usage >&2; die "unexpected argument: $1" ;;
+    esac
+  done
+  if ! exists; then
+    echo "emulator: no instance '$name'" >&2
+    return 0
+  fi
+  if [ "$keep" = 1 ]; then
+    stop
+    mkdir -p "$dir"
+    grep -qx kept=1 "$dir/creator" 2>/dev/null || echo kept=1 >> "$dir/creator"
+    echo "emulator: '$name' down; AVD kept (down again to delete it)" >&2
+  else
+    delete
+    echo "emulator: '$name' down and deleted" >&2
+  fi
+}
+
+# Every instance with a record or an AVD.
+instance_names() {
+  local f n
+  for f in "$state_root"/*/ "$ANDROID_AVD_HOME"/pm-*.avd "$ANDROID_AVD_HOME"/pm-*.ini; do
+    [ -e "$f" ] || continue
+    n=${f%/}
+    n=${n##*/}
+    case $f in "$ANDROID_AVD_HOME"/*) n=${n#pm-}; n=${n%.*} ;; esac
+    valid_name "$n" && echo "$n"
+  done | sort -u
+}
+
+# Why the selected instance is stale, or nothing if it is not. A running
+# instance is stale only once its creator's worktree is gone; a record
+# without a pid is an `up` in flight while its owner runs.
+stale_reason() {
+  local wt snapshot
+  [ -d "$dir" ] || { echo "AVD without a record"; return; }
+  wt=$(meta worktree)
+  [ -z "$wt" ] || [ -d "$wt" ] || { echo "worktree $wt gone"; return; }
+  snapshot=$(cat "$dir/instance" 2>/dev/null || true)
+  running && return
+  if [ -n "$snapshot" ]; then
+    if [ -z "$(field pid)" ]; then
+      local owner now
+      owner=$(field owner)
+      now=$(started "${owner:-0}")
+      [ -n "$owner" ] && [ -n "$now" ] && [ "$now" = "$(field owner_started)" ] && return
+      echo "interrupted up"
+    else
+      echo "crashed"
+    fi
+    return
+  fi
+  [ "$(meta kept)" = 1 ] || echo "stopped without --keep"
+}
+
+state() {
+  local snapshot
+  snapshot=$(cat "$dir/instance" 2>/dev/null || true)
+  if running; then echo up
+  elif [ -n "$snapshot" ] && [ -z "$(field pid)" ]; then echo starting
+  elif [ "$(meta kept)" = 1 ]; then echo kept
+  else echo down
+  fi
+}
+
+list() {
+  local n now
+  now=$(date +%s)
+  printf '%-16s %-8s %5s  %-40s %s\n' NAME STATE AGE CREATOR STALE
+  for n in $(instance_names); do
+    (
+      select_instance "$n"
+      created=$(meta created) age="?" creator="?"
+      [ -z "$created" ] || age="$(( (now - created) / 3600 ))h"
+      [ -z "$(meta worktree)" ] || creator="$(meta agent)@$(meta worktree)"
+      reason=$(stale_reason)
+      printf '%-16s %-8s %5s  %-40s %s\n' "$n" "$(state)" "$age" "$creator" "${reason:--}"
+    )
+  done
+}
+
+# Delete every stale instance; with an argument, say nothing when none is.
+prune() {
+  local n reason pruned=0
+  for n in $(instance_names); do
+    reason=$(select_instance "$n"; stale_reason)
+    [ -n "$reason" ] || continue
+    ( select_instance "$n"; delete )
+    echo "emulator: pruned '$n' ($reason)" >&2
+    pruned=$((pruned + 1))
+  done
+  [ "$pruned" -gt 0 ] || [ -n "${1:-}" ] || echo "emulator: nothing to prune" >&2
 }
 
 status() {
@@ -441,15 +588,15 @@ case $cmd in
   "") usage >&2; exit 2 ;;
 esac
 
+[ "$cmd" != list ] || { list; exit 0; }
 adb=$(adb_bin)
 case $cmd in
-  _claim) mkdir -p "$dir"; pick_ports
-          printf 'console=%s\nadb_port=%s\nserial=emulator-%s\n' "$console" "$adb_port" "$console" \
-            > "$dir/instance" ;;
+  _claim) claim "$1" ;;
+  _prune) prune ;;
   setup) setup ;;
   up) up "$@" ;;
-  down) down ;;
-  remove) remove ;;
+  down) down "$@" ;;
+  prune) locked _prune ;;
   status) status ;;
   env) require_up
        printf 'export ANDROID_ADB_SERVER_PORT=%s ANDROID_SERIAL=%s\n' "$adb_port" "$serial" ;;

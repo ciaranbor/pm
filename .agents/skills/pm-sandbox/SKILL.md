@@ -1,6 +1,6 @@
 ---
 name: pm-sandbox
-description: Exercise a pm build by hand or end to end without touching the real environment. Use whenever you run, try, QA, or smoke-test pm changes, the Android app included. Never run a build under test against the real registry, home directory, or default tmux server.
+description: Exercise a pm build by hand or end to end without touching the real environment. Use whenever you run, try, QA, or smoke-test pm changes, the Android app included (on a headless emulator, `scripts/emulator`). Never run a build under test against the real registry, home directory, or default tmux server.
 ---
 
 # pm sandbox
@@ -47,7 +47,8 @@ description: Exercise a pm build by hand or end to end without touching the real
   (`assembleGoogleDebug`), start `pm serve --port P` in your sandbox
   (`scripts/sandbox run -- sh -c 'pm serve --port P >serve.log 2>&1 &'`, P not
   7764, the real server's), `pair -s <sandbox> -p P`, then `tap`, `type`,
-  `ui` and `screenshot`, and `down`. Name it as you name your sandbox (`-n`).
+  `ui` and `screenshot`, then `down` when done; `down --keep` only to `up`
+  again with the app installed. Name it as you name your sandbox (`-n`).
   Use the phone only for what an emulator lacks (real push, the camera, the
   user's own install), and only when the user asks.
 - Testing on the Android phone (`adb`): run the session under
