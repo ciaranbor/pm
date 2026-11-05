@@ -1,5 +1,6 @@
 package dev.pm.app.ui
 
+import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -25,6 +26,7 @@ import dev.pm.app.data.Repository
 import dev.pm.app.data.Store
 import dev.pm.app.model.Pairing
 import dev.pm.app.push.Target
+import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +45,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 
 @RunWith(RobolectricTestRunner::class)
 class LifecycleUiTest {
@@ -125,6 +128,16 @@ class LifecycleUiTest {
         compose.setContent { PmTheme { App(model, shown, targetShown = {}) } }
         compose.waitUntil(WAIT) { model.snapshot.value != null }
     }
+
+    /**
+     * Wait for the event stream to be live. The paused looper's clock stands still unless moved, so
+     * it is moved here: a first connect that fails then retries after the app's own backoff.
+     */
+    private fun awaitLive() =
+        compose.waitUntil(WAIT) {
+            shadowOf(Looper.getMainLooper()).idleFor(Duration.ofMillis(100))
+            model.connection.value == Connection.Live
+        }
 
     /** Open the project page's menu, reached by Up from one of its workspaces. */
     private fun openProjectMenu() {
@@ -283,7 +296,7 @@ class LifecycleUiTest {
     fun a_feature_newer_than_any_snapshot_yet_stays_open() {
         events = { stream.response("snapshot" to SNAPSHOT) }
         open(Target("app", "fresh", "implementer"))
-        compose.waitUntil(WAIT) { model.connection.value == Connection.Live }
+        awaitLive()
         compose.waitForIdle()
 
         compose.onNodeWithText("fresh").assertIsDisplayed()
@@ -295,7 +308,7 @@ class LifecycleUiTest {
         val without = SNAPSHOT.replace(""""name": "login"""", """"name": "login-gone"""")
         events = { stream.response("snapshot" to SNAPSHOT, later = listOf("snapshot" to without)) }
         open(Target("app", "login", null))
-        compose.waitUntil(WAIT) { model.connection.value == Connection.Live }
+        awaitLive()
         compose.onNodeWithText("Message the agent").assertIsDisplayed()
 
         stream.sendLater()
@@ -313,7 +326,7 @@ class LifecycleUiTest {
         val without = SNAPSHOT.replace(""""name": "search"""", """"name": "search-gone"""")
         events = { stream.response("snapshot" to SNAPSHOT, later = listOf("snapshot" to without)) }
         open(Target("app", "login", null))
-        compose.waitUntil(WAIT) { model.connection.value == Connection.Live }
+        awaitLive()
         shown = Target("app", "search", null)
         compose.onNodeWithText("Merge").assertIsDisplayed()
 
@@ -373,7 +386,7 @@ class LifecycleUiTest {
                 .replace(SNAPSHOT, """"agents": [],""")
         events = { stream.response("snapshot" to SNAPSHOT, later = listOf("snapshot" to without)) }
         open(Target("app", "login", "implementer"))
-        compose.waitUntil(WAIT) { model.connection.value == Connection.Live }
+        awaitLive()
 
         compose.onNodeWithContentDescription("More actions").performClick()
         compose.onNodeWithText("Delete implementer").performClick()
