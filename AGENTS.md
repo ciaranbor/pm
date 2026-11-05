@@ -161,6 +161,9 @@ recovery). Always pass `-L` to a test server by hand.
 runs the built binary in one and says what earns a scenario. A `Harness` seam
 change verifies every harness live (`cargo test --test real_harness --
 --ignored`, else `up --real`), or records in the summary each it could not.
+`scripts/emulator` (`--help`) runs the app on a headless Android emulator,
+isolated from the user's phone: a change under `android/` is exercised on it,
+not judged by reading.
 
 ## Testing approach
 

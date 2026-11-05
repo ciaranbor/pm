@@ -2,7 +2,8 @@
 //! tracking, against a fake SDK: an `adb` that logs each call with the
 //! server port it targets, and an `emulator` that starts a helper in its
 //! process group (as the real one starts netsimd) and exits on `emu kill`
-//! without it.
+//! without it. Also its lifecycle: `down` deletes an instance and `up`
+//! prunes what crashed runs and deleted worktrees left.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,7 +20,9 @@ echo "${ANDROID_ADB_SERVER_PORT:-5037} $*" >> "$FAKE_SDK/adb.log"
 [ "$1" = -s ] && shift 2
 case "$*" in
   "start-server"|"kill-server") ;;
-  "shell getprop sys.boot_completed") echo 1 ;;
+  "shell getprop sys.boot_completed")
+    kill -0 "$(cat "$FAKE_SDK/$ANDROID_SERIAL.pid" 2>/dev/null)" 2>/dev/null || exit 1
+    echo 1 ;;
   "emu kill") kill "$(cat "$FAKE_SDK/$ANDROID_SERIAL.pid")" ;;
   "exec-out cat /sdcard/pm-ui.xml") cat "$FAKE_SDK/ui.xml" ;;
   shell*) ;;
@@ -99,6 +102,57 @@ impl Sdk {
             .find_map(|l| l.strip_prefix(&format!("{key}=")))
             .unwrap_or_else(|| panic!("no {key} in {name}'s record"))
             .to_string()
+    }
+
+    fn avd(&self, name: &str) -> PathBuf {
+        self.state().join(format!("android/avd/pm-{name}.avd"))
+    }
+
+    fn avd_ini(&self, name: &str) -> PathBuf {
+        self.state().join(format!("android/avd/pm-{name}.ini"))
+    }
+
+    /// Point NAME's creator record at a worktree that does not exist.
+    fn orphan(&self, name: &str) {
+        let dir = self.state().join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("creator"),
+            "created=0\nworktree=/nonexistent/pm-worktree\nagent=gone\n",
+        )
+        .unwrap();
+    }
+
+    /// Make the fake emulator exit at once, as one failing to boot does.
+    fn break_emulator(&self) {
+        fs::write(self.sdk().join("emulator/emulator"), "#!/bin/sh\nexit 1\n").unwrap();
+    }
+
+    fn restore_emulator(&self) {
+        fs::write(self.sdk().join("emulator/emulator"), FAKE_EMULATOR).unwrap();
+    }
+
+    /// A record of ports claimed by an `up` (OWNER) that has not started
+    /// its emulator, from a worktree that exists.
+    fn claim_record(&self, name: &str, owner: &str, owner_started: &str, console: u16) {
+        let dir = self.state().join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("creator"),
+            format!(
+                "created=0\nworktree={}\nagent=\n",
+                self.tmp.path().display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            dir.join("instance"),
+            format!(
+                "console={console}\nadb_port={}\nserial=emulator-{console}\nowner={owner}\nowner_started={owner_started}\n",
+                console - 500
+            ),
+        )
+        .unwrap();
     }
 
     fn pid(&self, file: &str) -> String {
@@ -301,4 +355,143 @@ fn concurrent_ups_get_distinct_ports() {
     for n in ["a", "b", "c"] {
         sdk.run(&["-n", n, "down"]);
     }
+}
+
+#[test]
+fn down_deletes_the_instance_unless_kept() {
+    let sdk = Sdk::new();
+    sdk.run(&["-n", "a", "up"]);
+    assert!(sdk.avd("a").join("config.ini").exists());
+    sdk.run(&["-n", "a", "down"]);
+    assert!(!sdk.avd("a").exists());
+    assert!(!sdk.avd_ini("a").exists());
+    assert!(!sdk.state().join("a").exists());
+
+    sdk.run(&["-n", "b", "up"]);
+    let marker = sdk.avd("b").join("userdata-marker");
+    fs::write(&marker, "").unwrap();
+    sdk.run(&["-n", "b", "down", "--keep"]);
+    assert!(marker.exists());
+    sdk.run(&["-n", "c", "up"]);
+    assert!(marker.exists(), "another up pruned a kept instance");
+    sdk.run(&["-n", "b", "up"]);
+    assert!(marker.exists(), "up did not reuse the kept AVD");
+    for n in ["b", "c"] {
+        sdk.run(&["-n", n, "down"]);
+    }
+}
+
+#[test]
+fn up_prunes_stale_instances_and_leaves_live_ones() {
+    let sdk = Sdk::new();
+    sdk.run(&["-n", "live", "up"]);
+    let live_pid = sdk.pid(&format!("{}.pid", sdk.record("live", "serial")));
+
+    // An AVD from before records existed, and one whose worktree is gone.
+    let old = sdk.avd("old");
+    fs::create_dir_all(&old).unwrap();
+    fs::write(old.with_extension("ini"), "").unwrap();
+    sdk.orphan("gone");
+    fs::create_dir_all(sdk.avd("gone")).unwrap();
+    fs::write(sdk.avd_ini("gone"), "").unwrap();
+
+    sdk.run(&["-n", "new", "up"]);
+    for n in ["old", "gone"] {
+        assert!(!sdk.avd(n).exists(), "{n}'s AVD survived");
+        assert!(!sdk.avd_ini(n).exists(), "{n}'s .ini survived");
+        assert!(!sdk.state().join(n).exists(), "{n}'s record survived");
+    }
+    assert!(alive(&live_pid), "up stopped a live instance");
+    assert!(sdk.avd("live").join("config.ini").exists());
+    for n in ["live", "new"] {
+        sdk.run(&["-n", n, "down"]);
+    }
+}
+
+#[test]
+fn prune_stops_and_deletes_a_running_instance_whose_worktree_is_gone() {
+    let sdk = Sdk::new();
+    sdk.run(&["-n", "a", "up"]);
+    let serial = sdk.record("a", "serial");
+    let (pid, helper) = (
+        sdk.pid(&format!("{serial}.pid")),
+        sdk.pid(&format!("{serial}.helper")),
+    );
+    sdk.orphan("a");
+
+    let listed = String::from_utf8(sdk.run(&["list"]).stdout).unwrap();
+    assert!(
+        listed.contains("worktree /nonexistent/pm-worktree gone"),
+        "{listed}"
+    );
+    sdk.run(&["prune"]);
+    wait_dead(&pid);
+    wait_dead(&helper);
+    assert!(!sdk.avd("a").exists());
+    assert!(!sdk.state().join("a").exists());
+}
+
+#[test]
+fn a_failed_up_keeps_a_kept_instance() {
+    let sdk = Sdk::new();
+    sdk.run(&["-n", "b", "up"]);
+    sdk.run(&["-n", "b", "down", "--keep"]);
+    sdk.break_emulator();
+    assert!(!sdk.output(&["-n", "b", "up"]).status.success());
+    sdk.restore_emulator();
+    sdk.run(&["-n", "c", "up"]);
+    assert!(sdk.avd("b").join("config.ini").exists(), "kept AVD pruned");
+    for n in ["b", "c"] {
+        sdk.run(&["-n", n, "down"]);
+    }
+}
+
+fn lstart(pid: u32) -> String {
+    let out = Command::new("ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8(out.stdout)
+        .unwrap()
+        .trim_start()
+        .trim_end_matches('\n')
+        .to_string()
+}
+
+#[test]
+fn prune_deletes_crashed_and_interrupted_instances_but_not_one_starting() {
+    let sdk = Sdk::new();
+    sdk.run(&["-n", "crashed", "up"]);
+    let serial = sdk.record("crashed", "serial");
+    for f in ["pid", "helper"] {
+        let pid = sdk.pid(&format!("{serial}.{f}"));
+        Command::new("kill").arg(&pid).status().unwrap();
+        wait_dead(&pid);
+    }
+
+    let mut owner = Command::new("sleep").arg("600").spawn().unwrap();
+    sdk.claim_record(
+        "starting",
+        &owner.id().to_string(),
+        &lstart(owner.id()),
+        5570,
+    );
+    let mut gone = Command::new("true").spawn().unwrap();
+    gone.wait().unwrap();
+    sdk.claim_record(
+        "interrupted",
+        &gone.id().to_string(),
+        "Thu Jan  1 00:00:00 1970",
+        5572,
+    );
+
+    sdk.run(&["prune"]);
+    let starting_survived = sdk.state().join("starting/instance").exists();
+    let _ = owner.kill();
+    let _ = owner.wait();
+    assert!(starting_survived, "pruned an up in flight");
+    for n in ["crashed", "interrupted"] {
+        assert!(!sdk.state().join(n).exists(), "{n} survived");
+    }
+    assert!(!sdk.avd("crashed").exists());
 }
