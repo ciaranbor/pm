@@ -28,7 +28,8 @@
 //! which holds in every permission mode and at the symlink-resolved path.
 //! It covers Claude Code's file tools and the shell file commands it
 //! recognises (redirects, `sed`, `tee`), not an arbitrary subprocess such
-//! as `cp` (2.1.296).
+//! as `cp` (2.1.296). Its `--add-dir` dirs are pm's own, pre-trusted so
+//! the session starts unattended ([`trust`]).
 //!
 //! A running session picks up edits to the user-level hooks file through
 //! its file watcher (verified on 2.1.272), so a new release's hook entries
@@ -46,6 +47,7 @@ pub(super) mod mode;
 pub(super) mod screen;
 pub(super) mod sessions;
 pub(super) mod transcript;
+pub(super) mod trust;
 pub(super) mod waiting;
 
 use std::path::{Path, PathBuf};
@@ -259,13 +261,22 @@ fn settings(protected_dirs: &[PathBuf]) -> String {
     json!({ "permissions": permissions }).to_string()
 }
 
-/// Write the agent's [`settings`] layer to its runtime dir, and remark on
-/// protected dirs no rule can name.
+/// Write the agent's [`settings`] layer to its runtime dir, record trust
+/// in its `--add-dir` dirs, all pm's own ([`trust`]), and remark on
+/// protected dirs no rule can name or trust it could not record.
 pub(super) fn pre_launch(ctx: &LaunchContext<'_>, spec: &SpawnSpec<'_>) -> Result<PreLaunch> {
     let file = runtime::agent_dir(ctx.project_root, ctx.feature, ctx.agent)?.join(SETTINGS_FILE);
     write_atomic(&file, settings(spec.protected_dirs).as_bytes())?;
+    let mut notes: Vec<String> = unguarded_note(spec.protected_dirs).into_iter().collect();
+    let config = trust::global_config(&crate::state::paths::home_dir()?);
+    if let Err(e) = trust::trust_dirs(&config, spec.edit_dirs) {
+        notes.push(format!(
+            "could not record Claude Code's trust in pm's state dirs ({e}); \
+             the agent may stop at a trust prompt"
+        ));
+    }
     Ok(PreLaunch {
-        notes: unguarded_note(spec.protected_dirs).into_iter().collect(),
+        notes,
         settings_file: Some(file),
         ..Default::default()
     })

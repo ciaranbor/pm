@@ -96,6 +96,9 @@ The default harness; it needs no setup beyond `claude` on your `PATH`
   [baseline](../README.md#shared-baseline-and-notice-board) with
   `--append-system-prompt-file`, and gives every agent the summaries
   directory with `--add-dir`, the orchestrator the information store too.
+  Claude Code asks at startup whether to trust such a directory, so pm
+  marks exactly those directories trusted in `.claude.json` (in
+  `$CLAUDE_CONFIG_DIR`, else your home) before each launch, and no others.
   It passes no `--permission-mode` unless an `[agents.permissions]` row
   sets one, so your own Claude Code default (auto mode, say) applies.
 - Every agent is launched with allow rules for pm's commands that only

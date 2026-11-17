@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn no_input_box_is_unknown() {
         assert_eq!(is_empty_in("", false), None);
-        let dialog = " Security guide\n ❯ No, exit\n   Yes, I trust this folder\n";
+        let dialog = &crate::testing::screen_fixture("claude-code-add-dir-trust");
         assert_eq!(is_empty_in(dialog, false), None);
     }
 
@@ -195,7 +195,7 @@ mod tests {
         let plain = tempfile::tempdir().unwrap();
         let normal = input("❯\u{a0}");
         let insert = screen(&["❯\u{a0}"], "  -- INSERT -- ⏸ manual mode on");
-        let dialog = " Security guide\n ❯ No, exit\n   Yes, I trust this folder\n";
+        let dialog = &crate::testing::screen_fixture("claude-code-add-dir-trust");
 
         assert_eq!(
             text_mode_key(&normal, plain.path(), Some(vim.path())),
