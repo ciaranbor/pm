@@ -80,7 +80,8 @@ pub enum FeatCommands {
         #[command(flatten)]
         target: ProjectFlag,
     },
-    /// Merge a feature branch into the base branch
+    /// Merge a feature branch into the base branch; a feature with a PR
+    /// merges it on GitHub, by `[github] merge_method`
     Merge {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,

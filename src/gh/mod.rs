@@ -1,10 +1,25 @@
+//! Every `gh` call pm makes, through one runner, which tests replace with
+//! the `fake` module so they run offline.
+
 use std::path::Path;
 use std::process::Command;
 
 use crate::error::{PmError, Result};
 use serde::Deserialize;
 
+mod merge;
+pub use merge::{
+    MergeMethod, PrMergeState, RepoMergeSettings, merge_pr, pr_merge_state, repo_merge_settings,
+};
+
+#[cfg(test)]
+pub(crate) mod fake;
+
 fn run_gh(repo_dir: &Path, args: &[&str]) -> Result<String> {
+    #[cfg(test)]
+    if let Some(reply) = fake::reply(args) {
+        return reply;
+    }
     let output = Command::new("gh")
         .args(args)
         .current_dir(repo_dir)

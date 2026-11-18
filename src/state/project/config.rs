@@ -16,6 +16,19 @@ pub struct ProjectConfig {
     pub agents: AgentsConfig,
     #[serde(default, skip_serializing_if = "is_default")]
     pub harness: HarnessConfig,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub github: GithubConfig,
+}
+
+/// How pm works with the project's GitHub repo.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GithubConfig {
+    /// How `pm feat merge` merges a feature's PR: "squash", "merge" or
+    /// "rebase". Unset follows the repo's default for the merging user.
+    /// A string, not an enum, so a bad value fails only the merge, not
+    /// every load of the config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_method: Option<String>,
 }
 
 pub(super) fn is_default<T: Default + PartialEq>(value: &T) -> bool {

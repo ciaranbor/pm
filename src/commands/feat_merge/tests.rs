@@ -3,6 +3,7 @@
 mod base;
 mod blocker;
 mod cleanup;
+mod github;
 mod hook;
 mod upstream;
 

@@ -27,7 +27,7 @@ and the mental model.
 - an agent harness: [Claude Code](https://claude.com/claude-code) (the
   default), codex, or opencode
 - [gh](https://cli.github.com/), only for the PR commands (`pm feat pr`,
-  `pm feat review`, `pm feat sync`)
+  `pm feat review`, `pm feat sync`, and `pm feat merge` of a feature with a PR)
 
 ## Install
 
@@ -348,7 +348,16 @@ durable findings. Ask `main` what's in the store when deciding what to do
 next.
 
 `pm feat pr create` / `edit` / `ready` and `pm feat sync` cover features
-that go through a GitHub PR instead.
+that go through a GitHub PR. Such a feature's `pm feat merge` merges the PR
+on GitHub, then pulls the base and removes the PR's branch from the remote.
+It refuses a draft, closed or conflicting PR, one with failing checks or
+targeting another base, and one whose head isn't the local branch (push
+first). A PR already merged on GitHub, squashed or not, is only cleaned up,
+so a merge that stopped partway can just be run again — unless the local
+branch has commits the merged PR lacks, which cleanup would delete; then it
+refuses. **`[github] merge_method`** (`squash`, `merge` or `rebase`, project
+config) picks how; unset, it's the method GitHub preselects for you, and one
+the repo doesn't allow is refused.
 
 ### Around a reboot
 
@@ -800,6 +809,9 @@ reviewer = "read-only"       # codex's -s sandbox mode, as reviewer runs on code
 [project]
 max_features = 6             # refuse feat new / feat adopt beyond 6 unmerged features
 fresh_base = true            # feat new on main starts from the remote's main (see --fresh)
+
+[github]
+merge_method = "squash"      # how pm feat merge merges a feature's PR (see Finish a feature)
 ```
 
 **Rows.** Keys are the `--agent` definition, not the display name: an agent

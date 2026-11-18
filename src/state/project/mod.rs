@@ -16,8 +16,8 @@ use crate::state::paths;
 pub(crate) use agent_settings::layered;
 pub use agent_settings::{AgentSettings, WILDCARD_AGENT, resolve_agent_settings, winning_row};
 pub use config::{
-    AgentsConfig, BundledConfig, BundledDisable, GlobalConfig, GlobalProjectConfig, ProjectConfig,
-    ProjectInfo, ServeConfig, UpgradeConfig,
+    AgentsConfig, BundledConfig, BundledDisable, GithubConfig, GlobalConfig, GlobalProjectConfig,
+    ProjectConfig, ProjectInfo, ServeConfig, UpgradeConfig,
 };
 pub use entry::{Malformed, ProjectEntry, Registry};
 pub use harness_config::{

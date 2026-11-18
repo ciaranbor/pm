@@ -329,6 +329,7 @@ fn a_waiter_going_idle_sends_its_features_due_ready_notice_once() {
         },
         agents: Default::default(),
         harness: Default::default(),
+        github: Default::default(),
     }
     .save(&paths::pm_dir(root))
     .unwrap();
@@ -457,6 +458,7 @@ fn wakes_that_never_drain_the_inbox_stop_the_loop_and_say_so() {
         },
         agents: Default::default(),
         harness: Default::default(),
+        github: Default::default(),
     }
     .save(&paths::pm_dir(dir.path()))
     .unwrap();

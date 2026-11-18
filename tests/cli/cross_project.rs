@@ -21,6 +21,7 @@ fn registered_project(home: &std::path::Path, name: &str) -> std::path::PathBuf 
         },
         agents: Default::default(),
         harness: Default::default(),
+        github: Default::default(),
     }
     .save(&root.join(".pm"))
     .unwrap();

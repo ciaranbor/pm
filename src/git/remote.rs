@@ -152,6 +152,24 @@ pub fn push_branch(repo: &Path, branch: &str) -> Result<()> {
     Ok(())
 }
 
+/// The remote `branch` was pushed to: its upstream's, else `origin`.
+pub fn push_remote(repo: &Path, branch: &str) -> Result<String> {
+    match run_git(
+        repo,
+        &["config", "--get", &format!("branch.{branch}.remote")],
+    ) {
+        Ok(remote) if !remote.is_empty() => Ok(remote),
+        Ok(_) | Err(crate::error::PmError::Git(_)) => Ok("origin".to_string()),
+        Err(e) => Err(e),
+    }
+}
+
+/// Delete `branch` from `remote`.
+pub fn delete_remote_branch(repo: &Path, remote: &str, branch: &str) -> Result<()> {
+    run_git(repo, &["push", remote, "--delete", branch])?;
+    Ok(())
+}
+
 /// List remotes with their URLs.
 pub fn list_remotes(repo: &Path) -> Result<String> {
     run_git(repo, &["remote", "-v"])
