@@ -1,5 +1,6 @@
 //! The asset tiers: the global store, `[bundled.disable]`, stale or
-//! redundant project copies, and definitions a harness has no projection of.
+//! redundant project copies, definitions a harness has no projection of,
+//! and files pm wrote that git still reports.
 
 use std::path::Path;
 
@@ -98,6 +99,21 @@ pub(super) fn asset_issues(
                  that name over it — rename the custom"
             ),
             fix: Fix::None,
+        });
+    }
+
+    let unexcluded = crate::commands::repo_exclude::missing(project_root, &[])?;
+    if let Some(first) = unexcluded.first() {
+        issues.push(Issue {
+            kind: IssueKind::PmFilesNotExcluded,
+            message: format!(
+                "{} file{} pm wrote show as untracked in git (first: {}); run `pm update` to \
+                 list them in the repo's info/exclude",
+                unexcluded.len(),
+                if unexcluded.len() == 1 { "" } else { "s" },
+                first.display()
+            ),
+            fix: Fix::Auto(FixAction::ExcludePmFiles),
         });
     }
 

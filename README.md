@@ -90,8 +90,17 @@ directory (or `--name`), a name no other registered project may have. pm
 records the repo's default branch (`origin/HEAD`, else the checked-out
 branch) as the project's main branch. Bundled skills, agents, and workflows
 install once per machine ([Customising](#customising)). pm projects your
-`main/.agents/` customs into `main/.claude/`, which is generated: gitignore
-it.
+`main/.agents/` customs into `main/.claude/`, which is generated.
+
+pm keeps the files it writes into your worktrees out of `git status` without
+committing anything: it lists them in a block of the clone's
+`.git/info/exclude`, which is never pushed. Since features get copies of
+main's untracked `.agents/` customs and harness files (`.claude/agents/`,
+`.claude/skills/`, `.claude/settings.json`, …), those are hidden in main
+too: every worktree shares the exclude file. Files the repo tracks stay
+visible, as do a skill a feature creates and harness files written by hand
+in a feature. To commit a listed file, `git add -f` it. `pm update` adds the
+block to existing projects; `pm doctor` reports files missing from it.
 
 Each also starts the orchestrator, the `main` agent, in that session
 (`--no-main` skips it; `pm agent spawn main` starts it later). `main`

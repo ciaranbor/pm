@@ -83,6 +83,9 @@ pub enum IssueKind {
     RedundantOverride,
     /// A project custom skill the harness resolves its global namesake over.
     SkillShadowedByGlobal,
+    /// Files pm wrote into the repo's worktrees that its exclude block does
+    /// not list, so git reports them as untracked.
+    PmFilesNotExcluded,
     /// An agent registered as `default` in a project `pm update` has not yet
     /// migrated to `plain` (`commands::vanilla_rename`).
     LegacyVanillaAgentName,
@@ -211,6 +214,8 @@ enum FixAction {
     MigrateVanillaAgents,
     /// `pm harness pull` the feature.
     PullFeatureAssets,
+    /// Rewrite the repo's exclude block (`repo_exclude`).
+    ExcludePmFiles,
 }
 
 /// The label of the finding for checks that span the whole project; git

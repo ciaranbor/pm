@@ -62,6 +62,7 @@ pub mod open;
 pub mod ready_notice;
 pub mod reexec;
 pub mod register;
+pub mod repo_exclude;
 pub mod restart_at_idle;
 pub mod restore;
 pub mod running_agents;

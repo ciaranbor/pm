@@ -290,6 +290,9 @@ fn apply_fix(
         FixAction::PullFeatureAssets => {
             crate::commands::seed::pull(project_root, name, false)?;
         }
+        FixAction::ExcludePmFiles => {
+            crate::commands::repo_exclude::sync(project_root)?;
+        }
     }
     Ok(Vec::new())
 }

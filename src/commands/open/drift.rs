@@ -36,6 +36,7 @@ fn is_open_recoverable(kind: IssueKind) -> bool {
         | IssueKind::StaleBundledCopies
         | IssueKind::RedundantOverride
         | IssueKind::SkillShadowedByGlobal
+        | IssueKind::PmFilesNotExcluded
         | IssueKind::LegacyVanillaAgentName
         | IssueKind::LegacyVanillaConfigRow
         | IssueKind::HooksMalformed
