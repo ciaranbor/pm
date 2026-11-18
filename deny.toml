@@ -16,6 +16,10 @@ ignore = [
     # are pm's VAPID signing key and per-message ephemeral ECDH keys, used
     # locally where no attacker can time them repeatedly.
     { id = "RUSTSEC-2026-0387", reason = "pinned by web-push-native; no 0.5.x fix" },
+    # chrono is unmaintained, with no known vulnerability. pm uses it
+    # throughout, including timestamps serialized into persisted state, so
+    # replacing it (jiff or time) is a migration of its own.
+    { id = "RUSTSEC-2026-0543", reason = "unmaintained, no known vulnerability; replacing it is a migration" },
 ]
 
 # Licences a dependency of an MIT-licensed binary may carry.
