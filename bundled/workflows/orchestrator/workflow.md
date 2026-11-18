@@ -13,9 +13,11 @@ feature only on these notices about its summary
 
 - **"Feature 'X' is ready"**: the team is still running. Review the
   summary against the guidance below and reply to the sender about any
-  gaps; don't triage yet. A repeated ready means the summary changed. If
-  the feature has already ended (its end notice is queued too, or it is
-  not in `pm feat list`), go straight to triage.
+  gaps. A decision left open is the user's to make in the feature's
+  session: tell the sender so, and don't raise it with the user here.
+  Don't triage yet. A repeated ready means the summary changed. If the
+  feature has already ended (its end notice is queued too, or it is not in
+  `pm feat list`), go straight to triage.
 - **"Feature 'X' was merged" / "was deleted …"**: triage the summary
   immediately, whether or not it was ready, then propose the next queued
   item in the information store to the user. A notice saying it left no
