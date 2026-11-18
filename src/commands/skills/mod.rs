@@ -68,7 +68,7 @@ use projection::project_dir;
 /// The canonical asset store, relative to the main worktree or home.
 pub const CANONICAL_DIR: &str = ".agents";
 
-const BASELINE_FILE: &str = "pm-baseline.md";
+pub(crate) const BASELINE_FILE: &str = "pm-baseline.md";
 
 /// One line per bundled item of `kind`: its global status (or that
 /// `[bundled.disable]` lists it), and — inside a project — whether a same-named

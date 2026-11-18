@@ -16,6 +16,8 @@
 //! them, is deleted as a whole: none of main's files for it are copied, and
 //! its harness projection — which git does not track, so no merge removes
 //! it — is removed. Nothing else in the feature is ever deleted.
+//! What a seed writes is kept out of git by the repo's exclude block
+//! ([`super::repo_exclude`]).
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -68,6 +70,14 @@ pub fn pull(project_root: &Path, feature_name: &str, dry_run: bool) -> Result<Pu
 }
 
 fn sync_feature(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> Result<Pulled> {
+    let pulled = seed(project_root, feature_worktree, dry_run)?;
+    if !dry_run {
+        super::repo_exclude::sync(project_root)?;
+    }
+    Ok(pulled)
+}
+
+fn seed(project_root: &Path, feature_worktree: &Path, dry_run: bool) -> Result<Pulled> {
     let main = paths::main_worktree(project_root);
     let seeder = Seeder::new(&main, feature_worktree, dry_run)?;
     let mut out = Pulled::default();

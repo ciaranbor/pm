@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::commands::repo_exclude;
 use crate::error::Result;
 use crate::harness::{self, Harness, ProjectionScope};
 use crate::state::paths;
@@ -38,16 +39,32 @@ pub fn harnesses_in_use(project_root: &Path) -> Result<Vec<Harness>> {
 }
 
 /// Project the main worktree's canonical store (the project's customs) into
-/// every harness in use. Returns one line per harness whose projection
-/// changed (`Would project …` in `dry_run`, which writes nothing); in sync
-/// yields no lines.
+/// every harness in use, and refresh the repo's exclude block
+/// ([`repo_exclude`]). Returns one line per harness whose projection
+/// changed and one if the block gained files (`Would …` in `dry_run`, which
+/// writes nothing); in sync yields no lines.
 pub fn project_assets(project_root: &Path, dry_run: bool) -> Result<Vec<String>> {
     let main = paths::main_worktree(project_root);
     let canonical = main.join(CANONICAL_DIR);
     let mut lines = Vec::new();
+    let mut written = Vec::new();
     for h in harnesses_in_use(project_root)? {
         let target = main.join(h.config_dir());
-        lines.extend(project_into(&canonical, h, &target, dry_run)?);
+        let (line, files) = project_into(&canonical, h, &target, dry_run)?;
+        lines.extend(line);
+        written.extend(files.into_iter().map(|f| Path::new(h.config_dir()).join(f)));
+    }
+    let excluded = if dry_run {
+        repo_exclude::missing(project_root, &written)?.len()
+    } else {
+        repo_exclude::sync(project_root)?
+    };
+    if excluded > 0 {
+        let verb = if dry_run { "Would exclude" } else { "Excluded" };
+        lines.push(format!(
+            "{verb} {excluded} file{} pm wrote from git (via the repo's info/exclude)",
+            if excluded == 1 { "" } else { "s" }
+        ));
     }
     Ok(lines)
 }
@@ -68,7 +85,7 @@ pub(super) fn project_global_from(
         let Some(target) = h.global_config_dir(home) else {
             continue;
         };
-        lines.extend(project_into(canonical, *h, &target, dry_run)?);
+        lines.extend(project_into(canonical, *h, &target, dry_run)?.0);
     }
     Ok(lines)
 }
@@ -78,13 +95,13 @@ fn project_into(
     h: Harness,
     target: &Path,
     dry_run: bool,
-) -> Result<Option<String>> {
+) -> Result<(Option<String>, Vec<PathBuf>)> {
     if !canonical.is_dir() {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
     let projection = h.project_assets(canonical, target, &ProjectionScope::default(), dry_run)?;
     if projection.is_empty() {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     }
     let verb = if dry_run {
         "Would project"
@@ -111,7 +128,7 @@ fn project_into(
             collisions.join(", ")
         ));
     }
-    Ok(Some(line))
+    Ok((Some(line), projection.written))
 }
 
 /// The global tier's skills and agent definitions pm does not bundle,

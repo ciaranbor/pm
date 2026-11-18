@@ -21,6 +21,8 @@ docs (`//!`) hold each mechanism. What follows is only what the tree doesn't say
   install to the data dir, never the git-backed config dir (`state/workflow.rs`).
   Home's supervisor skill lives only in home's project tier, never the global
   one, so no other agent lists it (`onboard.rs`).
+  pm commits nothing pm-specific to a project repo: what it writes into
+  worktrees is kept out of git through `info/exclude` (`repo_exclude.rs`).
 - **Portability** — `path_utils.rs` swaps `~/` ↔ `$HOME` so registry state moves.
 - **Releases** — one version for pm and app, Cargo.toml's; one APK signing key, ever;
   a removed `pm serve` path joins `RETIRED` (`commands/serve/routes.rs`) so old apps
