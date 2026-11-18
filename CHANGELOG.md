@@ -6,6 +6,12 @@ notes.
 
 ## Unreleased
 
+- Feature agents put every decision about their feature to you in the
+feature's own session, marking it blocked while they wait, instead of
+leaving it in the summary for `main`; `main` no longer raises a feature's
+decisions with you. Agents mark a feature ready again after any substantive
+summary change, and message `main` only to answer its questions.
+
 ## 0.7.2 — 2026-11-04
 
 - The bundled workflows move from `~/.config/pm/workflows/` to

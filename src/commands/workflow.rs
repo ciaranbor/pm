@@ -23,17 +23,19 @@ use crate::state::workflow::{self, WorkflowDef};
 const SUMMARY_GUIDANCE: &str = "\
 ## Status and summary
 
-When you wait on the user, run `pm feat status blocked -m \"<what you need>\"`.
-Their reply sets it back to wip on its own; if it is still blocked once
-they have answered (`pm feat status` shows it), run `pm feat status wip`.
+Put every decision about this feature to the user in your own session,
+never through `main`. While you wait, run
+`pm feat status blocked -m \"<what you need>\"`. Their reply sets it back to
+wip on its own; if it is still blocked once they have answered
+(`pm feat status` shows it), run `pm feat status wip`.
 
 If the active workflow names you the summary owner, write the summary at the
 path `pm feat summary path` prints, editing it like any other file. It is
-kept in pm state, never in the worktree, for an orchestrator who never saw
-the feature and reads it after the branch is gone. If git history, the code, or the merge
-already records something, leave it out; if it would be lost with the branch,
-write it down. Not a running log: write it when you know what the work leaves
-behind, and add to it if more emerges.
+kept in pm state, never in the worktree, for `main`, which never saw the
+feature, to triage after the branch is gone. If git history, the code, or
+the merge already records something, leave it out; if it would be lost with
+the branch, write it down. Not a running log: write it when you know what
+the work leaves behind, and add to it if more emerges.
 
 Open the summary with one or two plain sentences on a single unwrapped line,
 before any heading, saying what the feature is and what it changed or found.
@@ -43,7 +45,7 @@ the name *is* the change. Then cover, in order of value:
 
 - out-of-scope bugs, gaps, and ideas you did not fix — self-contained
   enough to act on without the branch
-- decisions that diverged from the brief, with the reason
+- decisions the brief didn't make or diverged from, with the reason
 - durable gotchas: external constraints, verified behaviour, dead-ends
 - user-facing consequences: breaking changes, required actions, migrations
 
@@ -51,14 +53,14 @@ Leave out review rounds and approvals, status lines, test counts or tool
 output, file-by-file change lists, smoke-test walkthroughs, and narration of
 how the work went (the baseline's `## Comments and docs` rule).
 
-Once the work is done and reviewed, the summary owner runs
-`pm feat status ready`, once. It needs the summary, and pm tells the
-orchestrator when no agent of the team is busy; the orchestrator reviews the
-summary for gaps while the team is still running: expect and answer its
-follow-up messages. Don't re-run it after each summary edit; run it again
-only once you have changed the summary in answer to the orchestrator. If
-more work follows, run `pm feat status wip`, and mark it ready again when
-done.
+`pm feat status ready` means the work is done and reviewed and no decision
+waits on the user. The summary owner runs it; pm tells `main` once no agent
+of the team is busy, and `main` may message you about gaps: reply to it. Put
+any decision it raises to the user first, and write into the summary
+anything worth keeping. Run it again after every substantive summary change
+(new work, a user's decision, an answer to `main`), not a wording fix; pm
+decides whether `main` needs telling. Before more work, run
+`pm feat status wip`. Message `main` only to answer its messages.
 ";
 
 /// Resolve the active workflow for the current scope and return its
