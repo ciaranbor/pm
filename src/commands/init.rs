@@ -163,6 +163,7 @@ pub(super) fn scaffold_state(path: &Path, name: &str, global: &GlobalStore) -> R
         },
         agents: AgentsConfig::default(),
         harness: Default::default(),
+        github: Default::default(),
     }
     .save(&paths::pm_dir(path))?;
 

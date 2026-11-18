@@ -64,5 +64,6 @@ pub fn project_config(name: &str) -> ProjectConfig {
         },
         agents: AgentsConfig::default(),
         harness: Default::default(),
+        github: Default::default(),
     }
 }

@@ -133,6 +133,7 @@ pub fn register(
         },
         agents: Default::default(),
         harness: Default::default(),
+        github: Default::default(),
     };
     config.save(&pm_dir)?;
 
