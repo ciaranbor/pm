@@ -6,6 +6,9 @@ commands run offline. Every call is appended to $HOME/log/gh.argv.
                           or change viewerDefaultMergeMethod)
   $HOME/gh/pr-<n>.json    PR <n> as `gh pr view --json` returns it; edit
                           state, isDraft, mergeable, statusCheckRollup, ...
+                          (`gh pr checks` reads the rollup and never waits;
+                          an open PR's headRefOid follows origin's branch;
+                          `gh run view` names the open PRs' failing checks)
   $HOME/gh/pr-<n>.merge   optional: "queue" makes `gh pr merge` succeed
                           without merging; "fail" merges, then fails as gh
                           does in a linked worktree (cli/cli#13955)
@@ -68,6 +71,40 @@ def prs():
             yield name[3:-5], load(name[3:-5])
 
 
+def pr_arg():
+    """The PR a `gh pr <cmd> [<n>]` call names, else the current branch's."""
+    if len(args) > 2 and not args[2].startswith("-"):
+        return args[2]
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    for n, pr in prs():
+        if pr["headRefName"] == branch and pr["state"] == "OPEN":
+            return n
+    sys.exit(f'no pull requests found for branch "{branch}"')
+
+
+def follow_head(n, pr):
+    """An open PR's head moves with its branch on origin, as on GitHub."""
+    if pr["state"] == "OPEN":
+        out = subprocess.run(
+            ["git", "ls-remote", "origin", "refs/heads/" + pr["headRefName"]],
+            capture_output=True, text=True,
+        ).stdout.split()
+        if out and out[0] != pr["headRefOid"]:
+            pr["headRefOid"] = out[0]
+            save(n, pr)
+    return pr
+
+
+def bucket(check):
+    value = (check.get("conclusion") or check.get("state") or "").upper()
+    if value in ("FAILURE", "ERROR", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"):
+        return "fail"
+    status = (check.get("status") or "").upper()
+    if (status and status != "COMPLETED") or value in ("PENDING", "EXPECTED"):
+        return "pending"
+    return "pass"
+
+
 def land(pr, method):
     origin = git("remote", "get-url", "origin")
     with tempfile.TemporaryDirectory() as tmp:
@@ -127,7 +164,18 @@ match args[:2]:
         })
         print(url)
     case ["pr", "view"]:
-        print(json.dumps(fields(load(args[2]))))
+        n = pr_arg()
+        print(json.dumps(fields(follow_head(n, load(n)))))
+    case ["pr", "checks"]:
+        n = pr_arg()
+        pr = follow_head(n, load(n))
+        rollup = pr.get("statusCheckRollup") or []
+        if not rollup:
+            sys.exit(f"no checks reported on the '{pr['headRefName']}' branch")
+        buckets = [bucket(c) for c in rollup]
+        for check, b in zip(rollup, buckets):
+            print(f"{check.get('name') or check.get('context')}\t{b}")
+        sys.exit(1 if "fail" in buckets else 8 if "pending" in buckets else 0)
     case ["pr", "ready"]:
         for n, pr in prs():
             if args[2] in (n, pr["headRefName"]):
@@ -166,5 +214,15 @@ match args[:2]:
         if mode == "fail":
             sys.exit(f"failed to run git: fatal: '{pr['baseRefName']}' is already used by worktree")
         print(f"✓ Merged pull request #{n}")
+    case ["run", "view"]:
+        failed = [
+            (c.get("name") or c.get("context"))
+            for _, pr in prs()
+            if pr["state"] == "OPEN"
+            for c in pr.get("statusCheckRollup") or []
+            if bucket(c) == "fail"
+        ]
+        for name in failed:
+            print(f"{name}\tsandbox shim: no real log; the check failed")
     case _:
         sys.exit(f"gh (sandbox shim): unsupported call: gh {' '.join(args)}")
