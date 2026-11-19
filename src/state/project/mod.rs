@@ -38,6 +38,15 @@ pub fn fresh_base(project_root: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Whether the project ships each feature as a GitHub PR: `ship` under
+/// `[github]`, project config only, unset meaning no.
+pub fn ships_to_github(project_root: &Path) -> bool {
+    ProjectConfig::load(&paths::pm_dir(project_root))
+        .ok()
+        .and_then(|c| c.github.ship)
+        .unwrap_or(false)
+}
+
 /// Check whether creating a new feature would exceed the configured limit.
 ///
 /// Counts features that are not Merged or Stale (i.e. Initializing, Wip, Review, Approved).

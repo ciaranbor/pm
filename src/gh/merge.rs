@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
+use super::checks::{self, Outcome};
 use super::run_gh;
 use crate::error::{PmError, Result};
 
@@ -109,16 +110,6 @@ struct PrJson {
     status_check_rollup: Vec<serde_json::Value>,
 }
 
-/// Conclusions of a check run, and states of a commit status, that fail it.
-const FAILING: &[&str] = &[
-    "FAILURE",
-    "ERROR",
-    "CANCELLED",
-    "TIMED_OUT",
-    "ACTION_REQUIRED",
-    "STARTUP_FAILURE",
-];
-
 pub fn pr_merge_state(repo_dir: &Path, pr: &str) -> Result<PrMergeState> {
     let output = run_gh(
         repo_dir,
@@ -135,20 +126,8 @@ pub fn pr_merge_state(repo_dir: &Path, pr: &str) -> Result<PrMergeState> {
     let failing_checks = parsed
         .status_check_rollup
         .iter()
-        .filter(|check| {
-            ["conclusion", "state"].iter().any(|key| {
-                check[key]
-                    .as_str()
-                    .is_some_and(|v| FAILING.contains(&v.to_uppercase().as_str()))
-            })
-        })
-        .map(|check| {
-            check["name"]
-                .as_str()
-                .or(check["context"].as_str())
-                .unwrap_or("unnamed check")
-                .to_string()
-        })
+        .filter(|check| checks::outcome(check) == Outcome::Fail)
+        .map(checks::name)
         .collect();
     Ok(PrMergeState {
         state: parsed.state.to_uppercase(),

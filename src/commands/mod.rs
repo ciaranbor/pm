@@ -74,6 +74,7 @@ pub mod serve_logs;
 pub mod serve_pair;
 pub mod serve_revoke;
 pub mod serve_status;
+pub mod ship_gate;
 pub mod skills;
 pub mod state_cmd;
 pub mod state_gitignore;

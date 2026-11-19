@@ -2,9 +2,10 @@
 //!
 //! Every scope has one ([`TeamStatus`]). `ready` is a feature's alone: it
 //! means waiting on a merge or delete, which main never is. It requires a
-//! non-empty summary and tells `main` ([`ready_notice`] has when, and when
-//! not again). `main` reviews it for gaps; triage waits for the merge or
-//! delete notice (see [`super::feat_delete`]). The notice carries the
+//! non-empty summary and, in a shipping project, a green PR
+//! ([`super::ship_gate`]), and tells `main` ([`ready_notice`] has when, and
+//! when not again). `main` reviews it for gaps; triage waits for the merge
+//! or delete notice (see [`super::feat_delete`]). The notice carries the
 //! sender's feature scope, so `main` can reply to the agent with follow-up
 //! questions while the team is still running. `blocked` and `wip` message
 //! no one.
@@ -66,7 +67,8 @@ pub fn feat_status(
     Ok(None)
 }
 
-/// `Ok` if `scope` may be marked ready: a feature with a summary.
+/// `Ok` if `scope` may be marked ready: a feature with a summary, and in a
+/// shipping project its work in a PR whose checks pass.
 fn check_ready(project_root: &Path, scope: &str) -> Result<()> {
     if scope == scope::MAIN {
         return Err(PmError::SafetyCheck(
@@ -74,16 +76,16 @@ fn check_ready(project_root: &Path, scope: &str) -> Result<()> {
                 .into(),
         ));
     }
-    FeatureState::load(&paths::features_dir(project_root), scope)?;
+    let feature = FeatureState::load(&paths::features_dir(project_root), scope)?;
     let summary = paths::summary_path(project_root, scope);
-    if std::fs::read_to_string(&summary).is_ok_and(|s| !s.trim().is_empty()) {
-        return Ok(());
+    if !std::fs::read_to_string(&summary).is_ok_and(|s| !s.trim().is_empty()) {
+        return Err(PmError::Summary(format!(
+            "feature '{scope}' has no summary; write one at {} (`pm feat summary path`) \
+             before marking it ready",
+            summary.display()
+        )));
     }
-    Err(PmError::Summary(format!(
-        "feature '{scope}' has no summary; write one at {} (`pm feat summary path`) \
-         before marking it ready",
-        summary.display()
-    )))
+    super::ship_gate::check(project_root, scope, &feature)
 }
 
 /// What `pm feat status [STATUS] [NAME] [-m REASON]` asks for.

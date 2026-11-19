@@ -29,6 +29,11 @@ pub struct GithubConfig {
     /// every load of the config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_method: Option<String>,
+    /// Ship each feature as a pull request: its team commits and opens the
+    /// PR, and `pm feat status ready` waits for the PR's checks to pass.
+    /// Unset means no.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ship: Option<bool>,
 }
 
 pub(super) fn is_default<T: Default + PartialEq>(value: &T) -> bool {

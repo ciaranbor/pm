@@ -96,10 +96,10 @@ pub enum FeatCommands {
     Pr(PrCommands),
     /// Set where the scope's work stands: wip, blocked (waiting on the
     /// user), or, for a feature only, ready (done; notifies the
-    /// orchestrator, needs a summary). Works in main too, which is never
-    /// ready. Without a status, show what needs attention: this feature, or
-    /// main and every feature, most urgent first, when run from main or
-    /// with --all
+    /// orchestrator, needs a summary, and with `[github] ship` a PR whose
+    /// checks pass). Works in main too, which is never ready. Without a
+    /// status, show what needs attention: this feature, or main and every
+    /// feature, most urgent first, when run from main or with --all
     Status {
         /// wip, blocked or ready; omit to view. Alone, a value that is not
         /// a status is taken as the scope name to view (`main` included)
