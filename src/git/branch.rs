@@ -231,6 +231,18 @@ pub fn branch_divergence(repo: &Path, branch: &str, base: &str) -> Result<Branch
     Ok(BranchDivergence { ahead, behind })
 }
 
+/// How many commits `branch` has that none of `bases` reach.
+pub fn commits_beyond(repo: &Path, branch: &str, bases: &[&str]) -> Result<usize> {
+    let excluded: Vec<String> = bases.iter().map(|b| format!("^{b}")).collect();
+    let mut args = vec!["rev-list", "--count", branch];
+    args.extend(excluded.iter().map(String::as_str));
+    let output = run_git(repo, &args)?;
+    output
+        .trim()
+        .parse()
+        .map_err(|_| PmError::Git(format!("bad rev-list count: {output}")))
+}
+
 /// Merge a branch into the current branch with `--no-ff` (always create a merge commit).
 pub fn merge_no_ff(repo: &Path, branch: &str) -> Result<()> {
     run_git(

@@ -78,6 +78,8 @@ Design decisions you can't recover by reading the tree. Preserve them.
   source — a def hand-written only in `.claude/agents/` does not resolve.
 - The reserved name `plain` means a definition-less vanilla session:
   validation skips it and the spawn passes no definition, unconditionally.
+- Agents commit and push only in a `[github] ship` project, told so by
+  `pm workflow show` alone (`workflow/shipping.rs`); definitions stay git-free.
 
 ### Registry, config, and the baseline
 

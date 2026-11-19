@@ -253,3 +253,16 @@ fn list_shows_the_settings_of_both_files_resolved() {
         ]
     );
 }
+
+#[test]
+fn github_ship_is_set_per_project_and_turns_on_shipping() {
+    let (_dir, files) = setup("");
+    let root = files.project_root.clone().unwrap();
+    assert!(!crate::state::project::ships_to_github(&root));
+
+    set(&files, Tier::Project, "github.ship", "true").unwrap();
+    assert!(crate::state::project::ships_to_github(&root));
+
+    let global = err(set(&files, Tier::Global, "github.ship", "true"));
+    assert!(global.contains("is project only"), "{global}");
+}

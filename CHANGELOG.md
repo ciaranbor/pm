@@ -6,6 +6,9 @@ notes.
 
 ## Unreleased
 
+- `[github] ship = true` in a project's config has its feature teams commit,
+open a ready PR and wait for CI; `pm feat status ready` refuses until the
+PR's checks pass.
 - Feature agents put every decision about their feature to you in the
 feature's own session, marking it blocked while they wait, instead of
 leaving it in the summary for `main`; `main` no longer raises a feature's

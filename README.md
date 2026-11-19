@@ -359,6 +359,15 @@ refuses. **`[github] merge_method`** (`squash`, `merge` or `rebase`, project
 config) picks how; unset, it's the method GitHub preselects for you, and one
 the repo doesn't allow is refused.
 
+**`[github] ship = true`** (project config, `pm config set github.ship true`)
+makes every feature ship as a GitHub PR. `pm workflow show` tells the
+summary owner to commit, open a ready PR with `pm feat pr create`, and wait
+for CI. Agents commit and push only in such a project. `pm feat status
+ready` then refuses until the PR holds the branch's latest commit and none
+of its checks is failing or still running, naming the ones that are; a PR
+with no checks passes. A feature with no commits of its own and a clean
+worktree, and a `pm feat review` feature, are exempt.
+
 ### Around a reboot
 
 pm keeps running in tmux; there is nothing to restart day to day. After a
@@ -604,7 +613,8 @@ A feature's **summary** is the hand-off its workflow's summary owner writes
 for `main` (`pm workflow show` says what belongs in it), kept at
 `.pm/summaries/<feature>.md` (`pm feat summary path`; `pm feat summary show`
 prints it), never on the branch.
-`pm feat status ready` requires it and asks `main` to review it, once none of
+`pm feat status ready` requires it (and in a project with `[github] ship`, a
+green PR) and asks `main` to review it, once none of
 the team's agents is busy. Marking it ready again tells `main` only of a
 changed summary, and, within one ready period, only after `main` has
 answered the last notice. Merging or
@@ -812,6 +822,7 @@ fresh_base = true            # feat new on main starts from the remote's main (s
 
 [github]
 merge_method = "squash"      # how pm feat merge merges a feature's PR (see Finish a feature)
+ship = true                  # agents open each feature's PR; ready waits for green CI (ditto)
 ```
 
 **Rows.** Keys are the `--agent` definition, not the display name: an agent

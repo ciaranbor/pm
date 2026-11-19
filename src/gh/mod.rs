@@ -7,7 +7,9 @@ use std::process::Command;
 use crate::error::{PmError, Result};
 use serde::Deserialize;
 
+mod checks;
 mod merge;
+pub use checks::{Outcome, PrChecks, pr_checks};
 pub use merge::{
     MergeMethod, PrMergeState, RepoMergeSettings, merge_pr, pr_merge_state, repo_merge_settings,
 };
