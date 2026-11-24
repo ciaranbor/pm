@@ -6,6 +6,8 @@ notes.
 
 ## Unreleased
 
+## 0.7.3 — 2026-11-24
+
 - `pm feat merge` on a feature with a GitHub PR merges the PR on GitHub
 (after checking it is open, not a draft, conflict-free, passing checks and
 holding the local branch's latest commit), then pulls the base and deletes
