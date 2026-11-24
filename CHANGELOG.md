@@ -6,6 +6,18 @@ notes.
 
 ## Unreleased
 
+- `pm feat merge` on a feature with a GitHub PR merges the PR on GitHub
+(after checking it is open, not a draft, conflict-free, passing checks and
+holding the local branch's latest commit), then pulls the base and deletes
+the remote branch. `[github] merge_method` picks squash, merge or rebase.
+- pm keeps the files it projects into a repo (skills, agent definitions,
+settings) out of git through the clone's `.git/info/exclude`, so a team
+repo needs no `.gitignore` lines for them; `pm doctor` reports and fixes
+missing entries.
+- Agents start unattended on Claude Code 2.1.326+: pm pre-trusts the
+directories it passes with `--add-dir`, which otherwise stop every spawn on
+an "Adding a new directory" prompt.
+- The bundled SQLite is upgraded past RUSTSEC-2026-0459.
 - `[github] ship = true` in a project's config has its feature teams commit,
 open a ready PR and wait for CI; `pm feat status ready` refuses until the
 PR's checks pass.
