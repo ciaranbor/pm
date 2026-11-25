@@ -39,7 +39,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::error::Result;
 use crate::harness::Harness;
@@ -129,7 +129,7 @@ pub const STARTING_SECS: i64 = 10;
 /// Whether `agent`'s harness has not started a session and its window,
 /// running only the shell its launch line was typed into, may yet start
 /// it ([`STARTING_SECS`]).
-pub fn starting(project_root: &Path, scope: &str, agent: &str, now: DateTime<Utc>) -> bool {
+pub fn starting(project_root: &Path, scope: &str, agent: &str, now: Timestamp) -> bool {
     let Some(spawned) = runtime::read_waiting(project_root, scope, agent)
         .filter(|w| w.kind == WaitingKind::Startup)
         .map(|w| w.since)
@@ -137,8 +137,8 @@ pub fn starting(project_root: &Path, scope: &str, agent: &str, now: DateTime<Utc
         return false;
     };
     match runtime::launched_at(project_root, scope, agent) {
-        Some(launched) => (now - launched).num_seconds() <= STARTING_SECS,
-        None => (now - spawned).num_seconds() <= super::launch_check::START_WITHIN.as_secs() as i64,
+        Some(launched) => (now - launched).as_secs() <= STARTING_SECS,
+        None => (now - spawned).as_secs() <= super::launch_check::START_WITHIN.as_secs() as i64,
     }
 }
 
@@ -159,7 +159,12 @@ pub fn exited_pane(
     };
     let dead = liveness(windows.processes(pane).as_deref(), agent.harness, config)
         == Liveness::Dead
-        && !starting(agent.project_root, agent.scope, agent.name, Utc::now())
+        && !starting(
+            agent.project_root,
+            agent.scope,
+            agent.name,
+            Timestamp::now(),
+        )
         && !tmux::panes::in_use(tmux_server, &pane.id)?;
     Ok(dead.then(|| pane.id.clone()))
 }
@@ -253,7 +258,7 @@ pub fn classify(
     }
     let at = at.or_else(|| {
         (!waiter)
-            .then(|| never_armed(project_root, scope, name, Utc::now()))
+            .then(|| never_armed(project_root, scope, name, Timestamp::now()))
             .flatten()
     });
     let at = at.map(|w| match w.kind {
@@ -272,20 +277,15 @@ pub fn classify(
 /// has run since — no prompt, no tool call, no waiter's marker: its start
 /// armed no waiter, so it sits at its prompt with nothing to wake it. The
 /// start is claimed like a turn end ([`runtime::claim_turn_end`]).
-fn never_armed(
-    project_root: &Path,
-    scope: &str,
-    agent: &str,
-    now: DateTime<Utc>,
-) -> Option<Waiting> {
+fn never_armed(project_root: &Path, scope: &str, agent: &str, now: Timestamp) -> Option<Waiting> {
     let started = runtime::started_at(project_root, scope, agent)?;
-    let grace = chrono::Duration::from_std(super::doctor::START_GRACE).ok()?;
+    let grace = jiff::SignedDuration::try_from(super::doctor::START_GRACE).ok()?;
     if now - started <= grace
         || runtime::last_activity(project_root, scope, agent).is_some_and(|at| at > started)
     {
         return None;
     }
-    let entry = format!("start-{}", started.timestamp_millis());
+    let entry = format!("start-{}", started.as_millisecond());
     if runtime::turn_end_claimed(project_root, scope, agent, &entry) {
         return None;
     }
@@ -461,7 +461,7 @@ mod tests {
 
         // Interrupted after a prompt cleared its marker, an agent whose
         // waiter also waits on background work is at that work.
-        let since = chrono::Utc::now() - chrono::Duration::minutes(3);
+        let since = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(3);
         runtime::take_waiter(&project, "login", "qa", waiter, Some(since)).unwrap();
         let prompt = Waiting::now(WaitingKind::Prompt, None);
         runtime::write_waiting(&project, "login", "qa", &prompt).unwrap();
@@ -589,8 +589,8 @@ mod tests {
             Some(&transcript),
         )
         .unwrap();
-        let opened = Utc::now() - chrono::Duration::minutes(5);
-        let closed = opened + chrono::Duration::minutes(1);
+        let opened = Timestamp::now() - jiff::SignedDuration::from_mins(5);
+        let closed = opened + jiff::SignedDuration::from_mins(1);
         let mut dialog = Waiting::now(
             WaitingKind::Dialog,
             Some("Auto-mode setup proposal is ready for review".into()),
@@ -600,7 +600,7 @@ mod tests {
         let mark = |dialog: &Waiting| runtime::write_waiting(root, "login", "qa", dialog).unwrap();
         let at = || waiting(root, "login", "qa", Harness::ClaudeCode);
         let entry = serde_json::json!({"type": "system", "subtype": "away_summary",
-                                       "timestamp": closed.to_rfc3339()});
+                                       "timestamp": closed.to_string()});
         std::fs::write(&transcript, format!("{entry}\n")).unwrap();
 
         mark(&dialog);
@@ -608,7 +608,7 @@ mod tests {
 
         let entry = serde_json::json!({"type": "system", "subtype": "informational",
             "content": "Auto-mode proposal discarded — nothing was saved.",
-            "timestamp": closed.to_rfc3339()});
+            "timestamp": closed.to_string()});
         std::fs::write(&transcript, format!("{entry}\n")).unwrap();
         let idle = at().unwrap();
         assert_eq!(
@@ -655,12 +655,16 @@ mod tests {
         assert_eq!(kind(Harness::Codex), None);
 
         let mut newer = Waiting::now(WaitingKind::Prompt, None);
-        newer.since = (written + std::time::Duration::from_secs(1)).into();
+        newer.since = (written + std::time::Duration::from_secs(1))
+            .try_into()
+            .unwrap();
         runtime::write_waiting(root, "login", "qa", &newer).unwrap();
         assert_eq!(kind(Harness::ClaudeCode), Some(WaitingKind::Prompt));
 
         let mut older = newer.clone();
-        older.since = (written - std::time::Duration::from_secs(1)).into();
+        older.since = (written - std::time::Duration::from_secs(1))
+            .try_into()
+            .unwrap();
         runtime::write_waiting(root, "login", "qa", &older).unwrap();
         assert_eq!(kind(Harness::ClaudeCode), Some(WaitingKind::Interrupted));
     }

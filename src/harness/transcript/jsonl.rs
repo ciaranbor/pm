@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde_json::Value;
 
 use super::items::{Body, Item, Page, Tail, ToolResult, mark_unfinished, moves_on};
@@ -31,7 +31,7 @@ pub(in crate::harness) enum Entry {
         call: String,
         text: String,
         error: bool,
-        at: Option<DateTime<Utc>>,
+        at: Option<Timestamp>,
     },
 }
 
@@ -60,7 +60,7 @@ fn tool_result(
     call: &str,
     text: &str,
     error: bool,
-    at: Option<DateTime<Utc>>,
+    at: Option<Timestamp>,
 ) -> ToolResult {
     ToolResult::new(text, error, at, || result_ref(offset, call))
 }
@@ -84,7 +84,7 @@ struct Orphan {
     call: String,
     text: String,
     error: bool,
-    at: Option<DateTime<Utc>>,
+    at: Option<Timestamp>,
 }
 
 /// The items of `lines`, in order, each tool call with its result when the

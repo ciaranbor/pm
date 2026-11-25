@@ -44,7 +44,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use chrono::{SecondsFormat, Utc};
+use jiff::Timestamp;
 
 use crate::error::{PmError, Result};
 use crate::state::devices::Devices;
@@ -377,7 +377,7 @@ fn header(name: &str, value: &str) -> tiny_http::Header {
 }
 
 fn log(line: &str) {
-    let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
+    let now = format!("{:.0}", Timestamp::now());
     eprintln!("{now} {line}");
 }
 

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use super::address;
 use super::layout::{max_index, meta_dir, sender_dir};
@@ -54,7 +54,7 @@ pub fn send_full(
 ) -> Result<u32> {
     let meta = MessageMeta {
         sender: sender.to_string(),
-        timestamp: Utc::now(),
+        timestamp: Timestamp::now(),
         sender_scope: sender_scope.map(|s| s.to_string()),
         sender_project: sender_project.map(|s| s.to_string()),
         from_outside: false,
@@ -75,7 +75,7 @@ pub fn send_by(
 ) -> Result<u32> {
     let meta = MessageMeta {
         sender: sender.to_string(),
-        timestamp: Utc::now(),
+        timestamp: Timestamp::now(),
         sender_scope: None,
         sender_project: None,
         from_outside: false,

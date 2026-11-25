@@ -6,7 +6,9 @@
 use std::fmt::Write;
 use std::path::Path;
 
-use chrono::{DateTime, Local, Utc};
+use jiff::civil::Date;
+use jiff::tz::TimeZone;
+use jiff::{Timestamp, ZonedDateTime};
 
 use crate::error::{PmError, Result};
 use crate::harness::transcript::items::{Body, Item};
@@ -30,7 +32,7 @@ pub fn log(project_root: &Path, scope: &str, name: &str, count: usize) -> Result
     };
     let page = conversation.page(None, count)?;
     let skip = page.items.len().saturating_sub(count);
-    let today = Local::now().date_naive();
+    let today = ZonedDateTime::now().date();
     let mut out = String::new();
     for (i, item) in page.items[skip..].iter().enumerate() {
         if i > 0 {
@@ -44,7 +46,7 @@ pub fn log(project_root: &Path, scope: &str, name: &str, count: usize) -> Result
     Ok(out)
 }
 
-fn render(out: &mut String, item: &Item, today: chrono::NaiveDate) {
+fn render(out: &mut String, item: &Item, today: Date) {
     let at = item.at.map(|at| stamp(at, today));
     let head = |out: &mut String, label: &str, extra: &str| {
         let mut line = format!("── {label}");
@@ -99,12 +101,12 @@ fn render(out: &mut String, item: &Item, today: chrono::NaiveDate) {
 }
 
 /// `at` in local time: the time alone when it is `today`.
-fn stamp(at: DateTime<Utc>, today: chrono::NaiveDate) -> String {
-    let local = at.with_timezone(&Local);
-    if local.date_naive() == today {
-        local.format("%H:%M").to_string()
+fn stamp(at: Timestamp, today: Date) -> String {
+    let local = at.to_zoned_datetime(TimeZone::system());
+    if local.date() == today {
+        local.strftime("%H:%M").to_string()
     } else {
-        local.format("%Y-%m-%d %H:%M").to_string()
+        local.strftime("%Y-%m-%d %H:%M").to_string()
     }
 }
 

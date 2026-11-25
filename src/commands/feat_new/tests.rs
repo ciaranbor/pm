@@ -15,7 +15,7 @@ fn feat_new_creates_all_resources() {
     let dir = tempdir().unwrap();
     let server = TestServer::new();
     let (project_path, projects_dir, project_name) = server.setup_project(dir.path());
-    let before = Utc::now();
+    let before = jiff::Timestamp::now();
 
     feat_new(&FeatNewParams::with_defaults(
         &project_path,

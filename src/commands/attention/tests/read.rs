@@ -1,4 +1,4 @@
-use chrono::Utc;
+use jiff::Timestamp;
 
 use super::*;
 use crate::commands::running_agents::STARTING_SECS;
@@ -36,7 +36,7 @@ fn a_marker_refines_only_an_agent_its_window_reads_as_busy() {
     mark("spawned", WaitingKind::Startup);
     let spawned_ago = |agent: &str, secs: i64| {
         let mut stale = runtime::Waiting::now(WaitingKind::Startup, None);
-        stale.since -= chrono::Duration::seconds(secs);
+        stale.since -= jiff::SignedDuration::from_secs(secs);
         runtime::write_waiting(&project, "login", agent, &stale).unwrap();
     };
     let past_starting = STARTING_SECS + 1;
@@ -109,7 +109,7 @@ fn a_marker_refines_only_an_agent_its_window_reads_as_busy() {
     let login = &super::project(&project, server.name()).unwrap().features[0];
     assert_eq!(login.agents[0].state, AgentState::Asking);
 
-    let at = |minutes| Utc::now() - chrono::Duration::minutes(minutes);
+    let at = |minutes| Timestamp::now() - jiff::SignedDuration::from_mins(minutes);
     runtime::set_activity(&project, "login", "starting", at(1));
     let login = &super::project(&project, server.name()).unwrap().features[0];
     assert!(login.working);
@@ -118,8 +118,8 @@ fn a_marker_refines_only_an_agent_its_window_reads_as_busy() {
     runtime::set_activity(&project, "login", "asking", at(25));
     let login = &super::project(&project, server.name()).unwrap().features[0];
     assert!(!login.working, "a busy agent silent for 30 minutes");
-    let quiet = Utc::now() - login.last_activity.unwrap();
-    assert_eq!(quiet.num_minutes(), 25, "the latest of its agents");
+    let quiet = Timestamp::now() - login.last_activity.unwrap();
+    assert_eq!(quiet.as_mins(), 25, "the latest of its agents");
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn background_work_is_not_working_and_dates_from_the_oldest_wait() {
         let waiter = processes.last().unwrap().pid;
         runtime::take_waiter(&project, "login", agent, waiter, None).unwrap();
         let mut waiting = runtime::Waiting::now(WaitingKind::Background, None);
-        waiting.since -= chrono::Duration::hours(hours);
+        waiting.since -= jiff::SignedDuration::from_hours(hours);
         runtime::write_waiting(&project, "login", agent, &waiting).unwrap();
         runtime::touch_activity(&project, "login", agent).unwrap();
         waiting.since

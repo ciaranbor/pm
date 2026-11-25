@@ -15,7 +15,7 @@ fn main_asking_needs_attention_alerts_once_and_unarmed_never_alerts() {
         )],
         ..Options::default()
     };
-    let now = Utc::now();
+    let now = Timestamp::now();
 
     let commands = commands(&asking, &published(""), now);
     assert_eq!(sets(&commands, ATTENTION), ["asking"]);
@@ -58,7 +58,7 @@ fn a_blocked_main_shows_its_attention_badge_and_alerts_once_but_not_when_reopene
         sessions: vec![Holder::session("app/main", options)],
         ..Options::default()
     };
-    let now = Utc::now();
+    let now = Timestamp::now();
 
     let commands = commands(&snapshot, &session(&[(PROJECT, "app")]), now);
     assert_eq!(sets(&commands, ATTENTION), ["blocked"]);
@@ -110,7 +110,7 @@ fn a_blocked_main_shows_a_dialog_and_alerts_it_then_shows_blocked_again_without_
         sessions: vec![Holder::session("app/main", options)],
         ..Options::default()
     };
-    let now = Utc::now();
+    let now = Timestamp::now();
     let alerted_blocked = session(&[
         (PROJECT, "app"),
         (ATTENTION, "blocked"),
@@ -147,7 +147,7 @@ fn a_blocked_main_shows_a_dialog_and_alerts_it_then_shows_blocked_again_without_
 
 #[test]
 fn a_main_session_shows_work_once() {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let main = |lead: AgentState, other: AgentState, working, minutes_ago| {
         let mut snapshot = main_scope(vec![
             AgentSnapshot {
@@ -173,7 +173,7 @@ fn a_main_session_shows_work_once() {
         ]);
         let scope = snapshot.projects[0].main.as_mut().unwrap();
         scope.working = working;
-        scope.last_activity = Some(now - chrono::Duration::minutes(minutes_ago));
+        scope.last_activity = Some(now - jiff::SignedDuration::from_mins(minutes_ago));
         snapshot
     };
     let published = Options {
@@ -222,7 +222,7 @@ fn a_main_session_shows_work_once() {
     );
     let mut waiting = main(AgentState::Background, AgentState::Idle, false, 185);
     waiting.projects[0].main.as_mut().unwrap().background_since =
-        Some(now - chrono::Duration::hours(26));
+        Some(now - jiff::SignedDuration::from_hours(26));
     assert_eq!(
         activity(&waiting),
         [

@@ -30,7 +30,7 @@ pub fn sync_one(
     if new_status != state.status {
         state.status = new_status;
         if new_status.is_active() {
-            state.last_active = chrono::Utc::now();
+            state.last_active = jiff::Timestamp::now();
         }
         state.save(features_dir, name)?;
     }

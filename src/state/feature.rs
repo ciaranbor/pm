@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -79,8 +79,8 @@ pub struct FeatureState {
     /// active (legacy features or those created without `--workflow`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
-    pub created: DateTime<Utc>,
-    pub last_active: DateTime<Utc>,
+    pub created: Timestamp,
+    pub last_active: Timestamp,
 }
 
 impl FeatureState {

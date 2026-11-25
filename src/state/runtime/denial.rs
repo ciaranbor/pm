@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{agent_dir, agent_file};
@@ -24,7 +24,7 @@ pub struct Denial {
     /// Why the classifier refused it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    pub since: DateTime<Utc>,
+    pub since: Timestamp,
     /// The shell command line refused, when the call ran one.
     #[serde(skip)]
     pub command: Option<String>,

@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::commands::feat_status_view::first_line;
 use crate::commands::running_agents::{AgentAt, Liveness, Windows, classify, starting};
@@ -256,9 +256,9 @@ impl ScopeReader<'_> {
         let session_exists = self.windows.has_session(&session);
         let registry = AgentRegistry::load(&paths::agents_dir(self.project_root), scope)?;
         let messages_dir = paths::messages_dir(self.project_root);
-        let now = Utc::now();
+        let now = Timestamp::now();
         let mut working = false;
-        let mut background_since: Option<DateTime<Utc>> = None;
+        let mut background_since: Option<Timestamp> = None;
         let mut last_activity = None;
         let agents: Vec<AgentSnapshot> = registry
             .agents
@@ -288,7 +288,7 @@ impl ScopeReader<'_> {
                     },
                 };
                 let active = runtime::last_activity(self.project_root, scope, agent);
-                let recent = active.is_some_and(|t| (now - t).num_seconds() < WORKING_SECS);
+                let recent = active.is_some_and(|t| (now - t).as_secs() < WORKING_SECS);
                 working |= recent && state == AgentState::Busy;
                 if state == AgentState::Background
                     && let Some(since) = waiting.as_ref().and_then(|w| w.since)
@@ -340,11 +340,11 @@ impl ScopeReader<'_> {
         agent: &str,
         harness: Harness,
         at: Option<Waiting>,
-        now: DateTime<Utc>,
+        now: Timestamp,
     ) -> (AgentState, Option<WaitingSnapshot>) {
         let grace = doctor::START_GRACE.as_secs() as i64;
         let waiting = at
-            .filter(|w| w.kind != WaitingKind::Startup || (now - w.since).num_seconds() > grace)
+            .filter(|w| w.kind != WaitingKind::Startup || (now - w.since).as_secs() > grace)
             .map(|w| {
                 let dialog = (w.kind.class() == WaitingClass::Asking)
                     .then(|| hooks_dialog::current_for(self.project_root, scope, agent, &w))

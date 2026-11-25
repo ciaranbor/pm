@@ -47,7 +47,7 @@ pub struct AgentEntry {
     pub harness: Harness,
     /// When the window now running this agent was launched, if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spawned_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub spawned_at: Option<jiff::Timestamp>,
 }
 
 impl AgentEntry {

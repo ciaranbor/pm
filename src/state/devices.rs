@@ -15,7 +15,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use crate::hash::{hex, sha256_hex};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PmError, Result};
@@ -25,7 +25,7 @@ use crate::state::serve_files::ServeFiles;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub token_sha256: String,
-    pub paired: DateTime<Utc>,
+    pub paired: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub push: Option<Push>,
 }
@@ -97,7 +97,7 @@ impl Devices {
             name.to_string(),
             Device {
                 token_sha256: digest(&token),
-                paired: Utc::now(),
+                paired: Timestamp::now(),
                 push: None,
             },
         );

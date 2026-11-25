@@ -2,13 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageMeta {
     pub sender: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
     /// The scope (feature name or "main") the sender was in when the message
     /// was sent. `None` for messages sent before cross-scope support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -54,7 +54,7 @@ pub enum MessageStatus {
 pub struct MessageSummary {
     pub sender: String,
     pub index: u32,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: Timestamp,
     pub first_line: String,
     pub status: MessageStatus,
 }

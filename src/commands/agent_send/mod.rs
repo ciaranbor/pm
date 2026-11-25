@@ -22,7 +22,7 @@ pub use upstream::resolve_upstream;
 use std::path::{Path, PathBuf};
 
 use crate::error::{PmError, Result};
-use chrono::Utc;
+use jiff::Timestamp;
 
 use crate::messages::{self, MessageMeta};
 use crate::state::agent::AgentRegistry;
@@ -90,7 +90,7 @@ impl Route {
         };
         MessageMeta {
             sender: sender.name.to_string(),
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             sender_scope,
             sender_project,
             from_outside,

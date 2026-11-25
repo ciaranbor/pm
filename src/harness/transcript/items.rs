@@ -3,7 +3,7 @@
 //! publishes as a versioned contract. Every harness's reader produces
 //! these and nothing else, so a change here is a change to that contract.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -19,7 +19,7 @@ pub const RESULT_LIMIT: usize = 4 * 1024;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Item {
     pub id: String,
-    pub at: Option<DateTime<Utc>>,
+    pub at: Option<Timestamp>,
     #[serde(flatten)]
     pub body: Body,
 }
@@ -74,7 +74,7 @@ pub struct ToolResult {
     pub error: bool,
     /// When the call returned, where the harness records it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub at: Option<DateTime<Utc>>,
+    pub at: Option<Timestamp>,
     pub truncated: bool,
     /// What fetches the whole output, when `text` was cut.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,7 +87,7 @@ impl ToolResult {
     pub fn new(
         text: &str,
         error: bool,
-        at: Option<DateTime<Utc>>,
+        at: Option<Timestamp>,
         full: impl FnOnce() -> String,
     ) -> Self {
         if text.len() <= RESULT_LIMIT {
@@ -114,7 +114,7 @@ impl ToolResult {
 }
 
 impl Item {
-    pub fn new(id: impl Into<String>, at: Option<DateTime<Utc>>, body: Body) -> Self {
+    pub fn new(id: impl Into<String>, at: Option<Timestamp>, body: Body) -> Self {
         Self {
             id: id.into(),
             at,
@@ -172,12 +172,10 @@ pub fn moves_on(items: &[Item]) -> bool {
 
 /// A timestamp field as the harnesses write it: RFC 3339, or epoch
 /// milliseconds.
-pub fn timestamp(value: Option<&Value>) -> Option<DateTime<Utc>> {
+pub fn timestamp(value: Option<&Value>) -> Option<Timestamp> {
     match value? {
-        Value::String(s) => DateTime::parse_from_rfc3339(s)
-            .ok()
-            .map(|t| t.with_timezone(&Utc)),
-        Value::Number(n) => DateTime::from_timestamp_millis(n.as_i64()?),
+        Value::String(s) => s.parse().ok(),
+        Value::Number(n) => Timestamp::from_millisecond(n.as_i64()?).ok(),
         _ => None,
     }
 }

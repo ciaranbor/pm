@@ -28,7 +28,7 @@ pub(in crate::harness) fn turn_ended(path: &Path) -> Option<Waiting> {
             .filter(|p| p.get("type").and_then(Value::as_str) == Some("task_complete"))?;
         let error = payload.get("error").filter(|e| !e.is_null())?;
         Some(Waiting {
-            since: mtime.into(),
+            since: jiff::Timestamp::try_from(mtime).ok()?,
             entry: Some(entry_id(payload.get("turn_id"), mtime)),
             ..Waiting::now(WaitingKind::Error, Some(describe(error)))
         })

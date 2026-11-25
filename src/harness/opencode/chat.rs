@@ -539,7 +539,7 @@ mod tests {
         };
         assert_eq!(input, "yes");
         assert!(result.truncated);
-        assert_eq!(result.at, chrono::DateTime::from_timestamp_millis(2500));
+        assert_eq!(result.at, jiff::Timestamp::from_millisecond(2500).ok());
         let full = full_result(&db.path, SESSION, result.full.as_deref().unwrap()).unwrap();
         assert_eq!(full.as_deref(), Some(output.as_str()));
         assert_eq!(full_result(&db.path, "ses_other", "msg_1:0").unwrap(), None);

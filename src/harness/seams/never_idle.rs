@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::error::Result;
 use crate::harness::{Harness, claude_code, codex, opencode};
@@ -177,7 +177,7 @@ impl Harness {
     /// Whether the session whose transcript is at `transcript` recorded
     /// that a dialog open since `since`, one no hook reports closing, has
     /// closed; never for a harness with no such dialog.
-    pub fn dialog_closed(self, transcript: &Path, since: DateTime<Utc>) -> bool {
+    pub fn dialog_closed(self, transcript: &Path, since: Timestamp) -> bool {
         match self {
             Harness::ClaudeCode => claude_code::transcript::dialog_closed(transcript, since),
             Harness::Codex | Harness::OpenCode => false,

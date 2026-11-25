@@ -68,7 +68,7 @@ pub fn install(tmux_server: Option<&str>) -> Result<Installed> {
         render(&exe, &path_env, &lang, tmux_server, &xdg, &files.log()).as_bytes(),
     )?;
     launchd::bootout(LABEL)?;
-    let began = chrono::Utc::now();
+    let began = jiff::Timestamp::now();
     launchd::bootstrap(&plist)?;
 
     let start = Instant::now();

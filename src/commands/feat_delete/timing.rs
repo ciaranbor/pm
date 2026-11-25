@@ -21,7 +21,7 @@ impl TimingLog {
         let _ = writeln!(
             buf,
             "\n--- {label}:{name} {} ---",
-            chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")
+            jiff::Timestamp::now().strftime("%Y-%m-%d %H:%M:%S UTC")
         );
         Self { path, buf }
     }

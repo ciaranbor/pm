@@ -38,7 +38,7 @@ pub(super) fn agent_issues(
     let past_grace = |entry: &AgentEntry| {
         entry
             .spawned_at
-            .map(SystemTime::from)
+            .and_then(|at| SystemTime::try_from(at).ok())
             .or(registry_written)
             .and_then(|since| since.elapsed().ok())
             .is_some_and(|age| age > START_GRACE)
@@ -556,11 +556,11 @@ mod tests {
         save(&|e| {
             e.harness = Harness::OpenCode;
             e.session_id = "ses_1".to_string();
-            e.spawned_at = Some(chrono::Utc::now());
+            e.spawned_at = Some(jiff::Timestamp::now());
         });
         assert_eq!(login_issues(), vec![]);
 
-        save(&|e| e.spawned_at = Some(chrono::Utc::now() - 2 * START_GRACE));
+        save(&|e| e.spawned_at = Some(jiff::Timestamp::now() - 2 * START_GRACE));
         assert_eq!(
             login_issues(),
             vec![(
@@ -596,7 +596,7 @@ mod tests {
         let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
         let entry = registry.get_mut("reviewer").unwrap();
         entry.harness = Harness::Codex;
-        entry.spawned_at = Some(chrono::Utc::now() - 2 * START_GRACE);
+        entry.spawned_at = Some(jiff::Timestamp::now() - 2 * START_GRACE);
         registry.save(&agents_dir, "login").unwrap();
 
         let issues: Vec<(IssueKind, String)> =
@@ -630,17 +630,17 @@ mod tests {
         server.spawn_fake_agent(&project_path, &session_name, "login", "reviewer");
 
         let agents_dir = paths::agents_dir(&project_path);
-        let long_ago = chrono::Utc::now() - 2 * START_GRACE;
+        let long_ago = jiff::Timestamp::now() - 2 * START_GRACE;
         let save = |edit: &dyn Fn(&mut AgentEntry)| {
             let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
             edit(registry.get_mut("reviewer").unwrap());
             registry.save(&agents_dir, "login").unwrap();
         };
-        let launched = |at: chrono::DateTime<chrono::Utc>| {
+        let launched = |at: jiff::Timestamp| {
             let file = runtime::reset_launched(&project_path, "login", "reviewer").unwrap();
             std::fs::File::create(file)
                 .unwrap()
-                .set_modified(at.into())
+                .set_modified(at.try_into().unwrap())
                 .unwrap();
         };
         let login_issues = || -> Vec<(IssueKind, String)> {
@@ -665,9 +665,9 @@ mod tests {
         save(&|e| {
             e.harness = Harness::Codex;
             e.session_id = "sess-1".to_string();
-            e.spawned_at = Some(chrono::Utc::now());
+            e.spawned_at = Some(jiff::Timestamp::now());
         });
-        launched(chrono::Utc::now());
+        launched(jiff::Timestamp::now());
         assert_eq!(login_issues(), vec![]);
 
         // The registry was written a moment ago, as it is whenever another
@@ -708,14 +708,14 @@ mod tests {
         assert_eq!(login_issues(), vec![]);
 
         // An entry with no spawn time is as old as the registry file.
-        launched(chrono::Utc::now());
+        launched(jiff::Timestamp::now());
         save(&|e| e.spawned_at = None);
         assert_eq!(login_issues(), vec![]);
         std::fs::File::options()
             .write(true)
             .open(agents_dir.join("login.toml"))
             .unwrap()
-            .set_modified(SystemTime::from(long_ago))
+            .set_modified(SystemTime::try_from(long_ago).unwrap())
             .unwrap();
         assert_eq!(login_issues(), not_started);
     }

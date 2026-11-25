@@ -92,7 +92,11 @@ fn the_endpoints_serve_the_snapshot_a_features_details_and_summary_and_an_agents
     assert!(info["workflow"]["description"].is_string(), "{info}");
     assert_eq!(info["rebase_in_progress"], false);
     for stamp in ["created", "last_active"] {
-        chrono::DateTime::parse_from_rfc3339(info[stamp].as_str().unwrap()).unwrap();
+        info[stamp]
+            .as_str()
+            .unwrap()
+            .parse::<jiff::Timestamp>()
+            .unwrap();
     }
 
     let (status, screen) = get(&format!("/v1/agents/{p}/login/implementer/screen"));

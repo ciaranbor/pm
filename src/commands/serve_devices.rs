@@ -15,7 +15,7 @@ pub fn devices(devices: &Path) -> Result<Vec<String>> {
         .map(|(name, d)| {
             format!(
                 "{name:width$}  paired {}",
-                d.paired.format("%Y-%m-%d %H:%M UTC")
+                d.paired.strftime("%Y-%m-%d %H:%M UTC")
             )
         })
         .collect())

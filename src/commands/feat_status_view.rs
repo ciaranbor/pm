@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::error::Result;
 use crate::state::feature::{FeatureState, Progress};
@@ -31,7 +31,10 @@ pub fn feature(project_root: &Path, name: &str) -> Result<Vec<String>> {
     };
     let mut head = format!("{name}  {}", team.progress);
     if let Some(active) = runtime::scope_last_activity(project_root, name).or(recorded) {
-        head.push_str(&format!("  (last active {})", age(active, Utc::now())));
+        head.push_str(&format!(
+            "  (last active {})",
+            age(active, Timestamp::now())
+        ));
     }
     let mut lines = vec![head];
     if let Some(reason) = team.reason() {
@@ -123,7 +126,7 @@ pub fn rows(
     projects: &[ProjectSnapshot],
     with_project: bool,
 ) -> Vec<String> {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let name = |project: &str, name: &str| {
         if with_project {
             format!("{project}/{name}")
@@ -261,8 +264,8 @@ pub(crate) fn first_line(project_root: &Path, name: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn age(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    if (now - then).num_seconds() < 60 {
+fn age(then: Timestamp, now: Timestamp) -> String {
+    if (now - then).as_secs() < 60 {
         return "just now".to_string();
     }
     format!("{} ago", span(then, now))
@@ -270,8 +273,8 @@ fn age(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
 
 /// How long ago `then` was, rounded down to its largest unit: `5m`, `3h`,
 /// `2d`.
-pub(crate) fn span(then: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let secs = (now - then).num_seconds().max(0);
+pub(crate) fn span(then: Timestamp, now: Timestamp) -> String {
+    let secs = (now - then).as_secs().max(0);
     match secs {
         0..3600 => format!("{}m", secs / 60),
         3600..86400 => format!("{}h", secs / 3600),
@@ -422,7 +425,7 @@ mod tests {
         name: &str,
         attention: Attention,
         agents: Vec<AgentSnapshot>,
-        last_activity: Option<DateTime<Utc>>,
+        last_activity: Option<Timestamp>,
     ) -> FeatureSnapshot {
         FeatureSnapshot {
             project: "app".into(),
@@ -453,7 +456,7 @@ mod tests {
 
     #[test]
     fn a_main_needing_attention_is_ranked_among_the_features_and_quiet_shows_how_long() {
-        let hours = |h| Some(Utc::now() - chrono::Duration::hours(h));
+        let hours = |h| Some(Timestamp::now() - jiff::SignedDuration::from_hours(h));
         let features = [
             snapshot_feature(
                 "login",
@@ -580,7 +583,7 @@ mod tests {
             &project,
             "login",
             "implementer",
-            Utc::now() - chrono::Duration::hours(3),
+            Timestamp::now() - jiff::SignedDuration::from_hours(3),
         );
 
         let lines = feature(&project, "login").unwrap();
@@ -620,8 +623,8 @@ mod tests {
 
     #[test]
     fn age_rounds_down_to_the_largest_unit() {
-        let now = Utc::now();
-        let ago = |secs| age(now - chrono::Duration::seconds(secs), now);
+        let now = Timestamp::now();
+        let ago = |secs| age(now - jiff::SignedDuration::from_secs(secs), now);
         assert_eq!(ago(5), "just now");
         assert_eq!(ago(150), "2m ago");
         assert_eq!(ago(7300), "2h ago");

@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use super::address::{name_of, validate_key};
 use super::cursor;
@@ -52,7 +52,7 @@ pub fn check(messages_dir: &Path, feature: &str, agent: &str) -> Result<Vec<Unre
 
 /// When `sender` last sent a message to any inbox in `feature`, by the
 /// metadata of each inbox's latest from it; `None` if it never has.
-pub fn last_sent(messages_dir: &Path, feature: &str, sender: &str) -> Option<DateTime<Utc>> {
+pub fn last_sent(messages_dir: &Path, feature: &str, sender: &str) -> Option<Timestamp> {
     std::fs::read_dir(messages_dir.join(feature))
         .ok()?
         .filter_map(|entry| {
@@ -112,7 +112,7 @@ pub fn read_at(
     let body = std::fs::read_to_string(&msg_path)?;
     let meta = load_meta(messages_dir, feature, agent, sender, index)?.unwrap_or(MessageMeta {
         sender: name_of(sender).to_string(),
-        timestamp: Utc::now(),
+        timestamp: Timestamp::now(),
         sender_scope: None,
         sender_project: None,
         from_outside: false,

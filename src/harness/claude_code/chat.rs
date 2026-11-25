@@ -109,7 +109,7 @@ pub(in crate::harness) fn parse(line: &Value, offset: u64) -> Vec<Entry> {
 
 fn user(
     line: &Value,
-    at: Option<chrono::DateTime<chrono::Utc>>,
+    at: Option<jiff::Timestamp>,
     item: &dyn Fn(Body) -> Vec<Entry>,
 ) -> Vec<Entry> {
     let flag = |key| line.get(key).and_then(Value::as_bool) == Some(true);
@@ -279,7 +279,7 @@ pub(crate) fn unpasted(text: &str) -> String {
     out
 }
 
-fn assistant(line: &Value, id: &str, at: Option<chrono::DateTime<chrono::Utc>>) -> Vec<Entry> {
+fn assistant(line: &Value, id: &str, at: Option<jiff::Timestamp>) -> Vec<Entry> {
     let Some(Value::Array(blocks)) = line.pointer("/message/content") else {
         return Vec::new();
     };

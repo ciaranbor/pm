@@ -29,7 +29,7 @@ pub fn feat_pr_ready(project_root: &Path, name: &str) -> Result<()> {
     gh::mark_pr_ready(&worktree_path, &state.branch)?;
 
     state.status = FeatureStatus::Review;
-    state.last_active = chrono::Utc::now();
+    state.last_active = jiff::Timestamp::now();
     state.save(&features_dir, name)?;
 
     Ok(())

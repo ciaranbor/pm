@@ -9,7 +9,7 @@ use tempfile::tempdir;
 
 #[test]
 fn delays_parse_whole_units_and_compounds() {
-    let secs = |text: &str| parse_delay(text).map(|d| d.num_seconds());
+    let secs = |text: &str| parse_delay(text).map(|d| d.as_secs());
     assert_eq!(secs("90s"), Ok(90));
     assert_eq!(secs("10m"), Ok(600));
     assert_eq!(secs("1h30m"), Ok(5400));
@@ -21,6 +21,21 @@ fn delays_parse_whole_units_and_compounds() {
     for bad in ["", "0m", "10", "5x", "-1m", "m", "1h 30m"] {
         assert!(parse_delay(bad).is_err(), "{bad:?} parsed");
     }
+}
+
+#[test]
+fn a_delay_past_the_last_representable_time_is_refused() {
+    let server = TestServer::new();
+    let dir = tempdir().unwrap();
+    let root = project(dir.path(), &server);
+    let delay = parse_delay("3000000d").unwrap();
+
+    let err = schedule(&root, "login", "reviewer", from_main(&root), "hi", delay).unwrap_err();
+    assert!(
+        err.to_string().contains("3000000d is too far ahead"),
+        "{err}"
+    );
+    assert!(scheduled::list(&root).unwrap().is_empty());
 }
 
 /// A project with an active `reviewer` in scope `login`.
@@ -54,11 +69,11 @@ fn a_send_is_delivered_once_due_with_its_senders_home() {
     let server = TestServer::new();
     let dir = tempdir().unwrap();
     let root = project(dir.path(), &server);
-    let delay = chrono::Duration::minutes(10);
+    let delay = jiff::SignedDuration::from_mins(10);
 
     let send = schedule(&root, "login", "reviewer", from_main(&root), "hi", delay).unwrap();
     assert!(
-        deliver_due(&root, Utc::now(), server.name())
+        deliver_due(&root, Timestamp::now(), server.name())
             .lines
             .is_empty()
     );
@@ -98,7 +113,7 @@ fn a_send_scheduled_from_a_shell_is_delivered_with_no_reply() {
         "reviewer",
         sender,
         "later",
-        chrono::Duration::minutes(1),
+        jiff::SignedDuration::from_mins(1),
     )
     .unwrap();
     deliver_due(&root, send.due, server.name());
@@ -122,7 +137,7 @@ fn racing_sweeps_deliver_a_send_once() {
     let server = TestServer::new();
     let dir = tempdir().unwrap();
     let root = project(dir.path(), &server);
-    let delay = chrono::Duration::seconds(1);
+    let delay = jiff::SignedDuration::from_secs(1);
     let send = schedule(&root, "login", "reviewer", from_main(&root), "hi", delay).unwrap();
 
     std::thread::scope(|s| {
@@ -139,7 +154,7 @@ fn a_cancelled_send_is_never_delivered() {
     let server = TestServer::new();
     let dir = tempdir().unwrap();
     let root = project(dir.path(), &server);
-    let delay = chrono::Duration::seconds(1);
+    let delay = jiff::SignedDuration::from_secs(1);
     let send = schedule(&root, "login", "reviewer", from_main(&root), "hi", delay).unwrap();
 
     cancel(&root, &send.id[..3]).unwrap();
@@ -153,7 +168,7 @@ fn a_send_whose_recipient_left_fails_for_good_and_stays_listed() {
     let server = TestServer::new();
     let dir = tempdir().unwrap();
     let root = project(dir.path(), &server);
-    let delay = chrono::Duration::seconds(1);
+    let delay = jiff::SignedDuration::from_secs(1);
     let send = schedule(&root, "login", "reviewer", from_main(&root), "hi", delay).unwrap();
     let agents = paths::agents_dir(&root);
     let mut registry = AgentRegistry::load(&agents, "login").unwrap();
@@ -174,7 +189,7 @@ fn a_send_whose_recipient_left_fails_for_good_and_stays_listed() {
 fn scheduling_to_an_inactive_recipient_fails_as_a_send_would() {
     let dir = tempdir().unwrap();
     let root = dir.path();
-    let delay = chrono::Duration::seconds(1);
+    let delay = jiff::SignedDuration::from_secs(1);
 
     let err = schedule(root, "login", "qa", from_main(root), "hi", delay).unwrap_err();
 
@@ -188,7 +203,7 @@ fn a_send_that_keeps_failing_is_failed_once_its_retries_time_out() {
     let server = TestServer::new();
     let dir = tempdir().unwrap();
     let root = project(dir.path(), &server);
-    let delay = chrono::Duration::seconds(1);
+    let delay = jiff::SignedDuration::from_secs(1);
     let send = schedule(&root, "login", "reviewer", from_main(&root), "hi", delay).unwrap();
     // The sender's home project is removed before the send falls due.
     let stored = paths::pm_dir(&root).join(format!("runtime/.scheduled/{}.json", send.id));
@@ -201,8 +216,8 @@ fn a_send_that_keeps_failing_is_failed_once_its_retries_time_out() {
     };
     std::fs::write(&stored, serde_json::to_vec(&moved).unwrap()).unwrap();
 
-    for late in [0, 1, RETRY_WINDOW.num_minutes() - 1] {
-        let at = send.due + chrono::Duration::minutes(late);
+    for late in [0, 1, RETRY_WINDOW.as_mins() - 1] {
+        let at = send.due + jiff::SignedDuration::from_mins(late);
         let swept = deliver_due(&root, at, server.name());
         assert!(swept.lines[0].contains("retried next sweep"), "{swept:?}");
     }

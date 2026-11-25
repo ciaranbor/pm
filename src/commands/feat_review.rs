@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use crate::commands::bundled_disable::Disabled;
 use crate::commands::feat_common::{self, InitStateFields};
@@ -163,7 +163,7 @@ fn setup_review(
 
         // Step 4: Update status to review
         state.status = FeatureStatus::Review;
-        state.last_active = Utc::now();
+        state.last_active = Timestamp::now();
         state.save(&features_dir, feature_name)?;
 
         Ok(())
@@ -336,7 +336,7 @@ mod tests {
         let (project_path, _, _) = server.setup_project(dir.path());
         let details = sample_details();
         simulate_fetched_pr(&project_path, "review-42");
-        let before = Utc::now();
+        let before = Timestamp::now();
 
         setup_review(&project_path, &details, "review-42", server.name()).unwrap();
 

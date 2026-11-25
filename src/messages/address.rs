@@ -91,12 +91,12 @@ fn validate_project(project: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     fn meta(sender: &str, scope: Option<&str>, project: Option<&str>) -> MessageMeta {
         MessageMeta {
             sender: sender.to_string(),
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             sender_scope: scope.map(str::to_string),
             sender_project: project.map(str::to_string),
             from_outside: false,

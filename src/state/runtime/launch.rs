@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use super::{agent_dir, agent_file};
 use crate::error::Result;
@@ -58,9 +58,9 @@ pub fn launched_file(project_root: &Path, scope: &str, agent: &str) -> PathBuf {
 }
 
 /// When the agent's window ran its spawn's typed line; `None` until it has.
-pub fn launched_at(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
+pub fn launched_at(project_root: &Path, scope: &str, agent: &str) -> Option<Timestamp> {
     let file = agent_file(project_root, scope, agent, LAUNCHED_FILE);
-    Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
+    Timestamp::try_from(std::fs::metadata(file).ok()?.modified().ok()?).ok()
 }
 
 /// Record whether the agent's spawn launches it with a prompt, whose turn's
@@ -111,7 +111,7 @@ pub fn reset_started(project_root: &Path, scope: &str, agent: &str) -> Result<()
 
 /// When the agent's harness session last started since its spawn; `None`
 /// until it has.
-pub fn started_at(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
+pub fn started_at(project_root: &Path, scope: &str, agent: &str) -> Option<Timestamp> {
     let file = agent_file(project_root, scope, agent, STARTED_FILE);
-    Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
+    Timestamp::try_from(std::fs::metadata(file).ok()?.modified().ok()?).ok()
 }

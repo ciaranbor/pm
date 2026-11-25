@@ -8,7 +8,7 @@
 use std::fs::{File, OpenOptions, TryLockError};
 use std::path::PathBuf;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -52,7 +52,7 @@ pub fn held(files: &ServeFiles) -> Result<bool> {
 pub struct State {
     pub pid: u32,
     pub exe: PathBuf,
-    pub started: DateTime<Utc>,
+    pub started: Timestamp,
     pub port: u16,
     /// Empty when written by a pm that predates the field.
     #[serde(default)]
@@ -65,7 +65,7 @@ impl State {
         Self {
             pid: std::process::id(),
             exe: std::env::current_exe().unwrap_or_default(),
-            started: Utc::now(),
+            started: Timestamp::now(),
             port,
             version: crate::version::VERSION.to_string(),
         }
