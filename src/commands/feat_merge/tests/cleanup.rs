@@ -234,3 +234,20 @@ fn a_feature_whose_worktree_directory_is_gone_still_merges() {
     assert!(git::branch_merged_into(&main_repo, &tip, "main").unwrap());
     assert!(!git::branch_exists(&main_repo, "login").unwrap());
 }
+
+#[test]
+fn commits_made_after_a_kept_merge_are_merged_before_cleanup() {
+    let dir = tempdir().unwrap();
+    let server = TestServer::new();
+    let (project_path, projects_dir, _) =
+        server.setup_project_with_feature_no_tmux(dir.path(), "login");
+    TestServer::add_feature_commit(&project_path, "login");
+    feat_merge(&project_path, &projects_dir, "login", true, server.name()).unwrap();
+    TestServer::commit_file(&project_path.join("login"), "later.txt", "later work");
+
+    feat_merge(&project_path, &projects_dir, "login", false, server.name()).unwrap();
+
+    let main_repo = paths::main_worktree(&project_path);
+    assert!(main_repo.join("later.txt").exists());
+    assert!(!git::branch_exists(&main_repo, "login").unwrap());
+}
