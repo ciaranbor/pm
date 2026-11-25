@@ -78,7 +78,7 @@ pub fn feat_pr(
     if ready {
         state.status = FeatureStatus::Review;
     }
-    state.last_active = chrono::Utc::now();
+    state.last_active = jiff::Timestamp::now();
     state.save(&features_dir, name)?;
 
     Ok(())
@@ -160,7 +160,7 @@ mod tests {
 
         // Simulate what feat_pr does after the gh interaction (draft PR — status stays wip)
         state.pr = "42".to_string();
-        state.last_active = chrono::Utc::now();
+        state.last_active = jiff::Timestamp::now();
         state.save(&features_dir, "login").unwrap();
 
         let reloaded = FeatureState::load(&features_dir, "login").unwrap();

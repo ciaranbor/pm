@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -31,7 +31,7 @@ pub struct Listed {
     pub description: String,
     /// Bytes; 0 when the file doesn't exist yet.
     pub size: u64,
-    pub modified: Option<DateTime<Utc>>,
+    pub modified: Option<Timestamp>,
 }
 
 /// The categories `categories.toml` lists, in its order, keeping only
@@ -78,7 +78,7 @@ pub fn list(root: &Path) -> Result<Vec<Listed>> {
                 size: meta.as_ref().map_or(0, std::fs::Metadata::len),
                 modified: meta
                     .and_then(|m| m.modified().ok())
-                    .map(DateTime::<Utc>::from),
+                    .and_then(|at| Timestamp::try_from(at).ok()),
                 filename: c.filename,
                 description: c.description,
             }

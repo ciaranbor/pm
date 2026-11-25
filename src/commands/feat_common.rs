@@ -13,7 +13,7 @@
 
 use std::path::Path;
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use crate::commands::bundled_disable::Disabled;
 use crate::commands::{agent_spawn, feat_delete, harness_check};
@@ -99,7 +99,7 @@ pub fn write_initializing_state(
     name: &str,
     fields: InitStateFields<'_>,
 ) -> Result<FeatureState> {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let state = FeatureState {
         status: FeatureStatus::Initializing,
         branch: fields.branch.to_string(),

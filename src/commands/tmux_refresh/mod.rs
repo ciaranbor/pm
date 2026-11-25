@@ -28,7 +28,7 @@ use crate::state::scope;
 use crate::tmux;
 use crate::tmux::options::{self, Command, Holder, Options, Scope, format_text};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use super::attention::{self, AgentSnapshot, Snapshot};
 use super::tmux_lock;
@@ -121,7 +121,10 @@ pub fn refresh(projects_dir: &Path, tmux_server: Option<&str>) -> Result<()> {
         return Ok(());
     };
     let snapshot = attention::all(projects_dir, tmux_server)?;
-    write(tmux_server, &commands(&snapshot, &published, Utc::now()))
+    write(
+        tmux_server,
+        &commands(&snapshot, &published, Timestamp::now()),
+    )
 }
 
 /// Run `commands`, the client tail last. A client that detached since the
@@ -136,7 +139,7 @@ fn write(tmux_server: Option<&str>, commands: &[Command]) -> Result<()> {
 /// What turns `published` into `snapshot`, as of `now`: the changed
 /// options, the announcement of any alerts ([`announce`]), then a redraw
 /// for each client.
-fn commands(snapshot: &Snapshot, published: &Options, now: DateTime<Utc>) -> Vec<Command> {
+fn commands(snapshot: &Snapshot, published: &Options, now: Timestamp) -> Vec<Command> {
     let mut writes = Vec::new();
     let mut alerts = Vec::new();
     let mut sessions: HashSet<&str> = HashSet::new();

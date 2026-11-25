@@ -19,7 +19,8 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Local, Utc};
+use jiff::Timestamp;
+use jiff::tz::TimeZone;
 
 use super::agent_send::{Home, Sender, check_recipient, send_as};
 use crate::error::{PmError, Result};
@@ -27,9 +28,9 @@ use crate::state::runtime::scheduled::{self, Scheduled, ScheduledHome};
 
 /// Parse a delay such as `90s`, `10m`, `2h`, `1d` or `1h30m`: one or more
 /// whole numbers, each followed by its unit. A zero delay is invalid.
-pub fn parse_delay(text: &str) -> std::result::Result<chrono::Duration, String> {
+pub fn parse_delay(text: &str) -> std::result::Result<jiff::SignedDuration, String> {
     let invalid = || format!("invalid delay '{text}': expected e.g. 30s, 10m, 2h, 1d or 1h30m");
-    let mut total = chrono::Duration::zero();
+    let mut total = jiff::SignedDuration::ZERO;
     let mut digits = String::new();
     for c in text.chars() {
         if c.is_ascii_digit() {
@@ -38,18 +39,19 @@ pub fn parse_delay(text: &str) -> std::result::Result<chrono::Duration, String> 
         }
         let n: i64 = digits.parse().map_err(|_| invalid())?;
         digits.clear();
-        let part = match c {
-            's' => chrono::Duration::try_seconds(n),
-            'm' => chrono::Duration::try_minutes(n),
-            'h' => chrono::Duration::try_hours(n),
-            'd' => chrono::Duration::try_days(n),
-            _ => None,
+        let unit: i64 = match c {
+            's' => 1,
+            'm' => 60,
+            'h' => 3_600,
+            'd' => 86_400,
+            _ => return Err(invalid()),
         };
-        total = part
-            .and_then(|p| total.checked_add(&p))
+        total = n
+            .checked_mul(unit)
+            .and_then(|secs| total.checked_add(jiff::SignedDuration::from_secs(secs)))
             .ok_or_else(invalid)?;
     }
-    if !digits.is_empty() || total <= chrono::Duration::zero() {
+    if !digits.is_empty() || total <= jiff::SignedDuration::ZERO {
         return Err(invalid());
     }
     Ok(total)
@@ -64,15 +66,21 @@ pub fn schedule(
     recipient: &str,
     sender: Sender<'_>,
     body: &str,
-    delay: chrono::Duration,
+    delay: jiff::SignedDuration,
 ) -> Result<Scheduled> {
     check_recipient(target_root, scope, recipient, sender)?;
-    let now = Utc::now();
+    let now = Timestamp::now();
+    let due = now.checked_add(delay).map_err(|_| {
+        PmError::Messaging(format!(
+            "a delay of {} is too far ahead to schedule",
+            delay_text(delay)
+        ))
+    })?;
     scheduled::schedule(
         target_root,
         Scheduled {
             id: String::new(),
-            due: now + delay,
+            due,
             created: now,
             scope: scope.to_string(),
             recipient: recipient.to_string(),
@@ -103,8 +111,8 @@ pub fn describe_scheduled(send: &Scheduled) -> String {
 }
 
 /// `delay` as [`parse_delay`] reads it, largest units first.
-fn delay_text(delay: chrono::Duration) -> String {
-    let mut left = delay.num_seconds();
+fn delay_text(delay: jiff::SignedDuration) -> String {
+    let mut left = delay.as_secs();
     let mut text = String::new();
     for (unit, secs) in [("d", 86_400), ("h", 3_600), ("m", 60), ("s", 1)] {
         if left >= secs {
@@ -150,15 +158,15 @@ pub fn cancel(project_root: &Path, prefix: &str) -> Result<String> {
     ))
 }
 
-fn local(at: DateTime<Utc>) -> String {
-    at.with_timezone(&Local)
-        .format("%Y-%m-%d %H:%M:%S")
+fn local(at: Timestamp) -> String {
+    at.to_zoned_datetime(TimeZone::system())
+        .strftime("%Y-%m-%d %H:%M:%S")
         .to_string()
 }
 
 /// How long after its first failed delivery a send is retried, for an
 /// error other than a missing recipient, before it is failed for good.
-const RETRY_WINDOW: chrono::TimeDelta = chrono::TimeDelta::minutes(10);
+const RETRY_WINDOW: jiff::SignedDuration = jiff::SignedDuration::from_mins(10);
 
 /// How a waiter sweeps: the tmux server sends heal through, and what it
 /// does once a sweep delivered something.
@@ -179,7 +187,7 @@ pub struct Swept {
 
 /// Send every send of the project at `project_root` due by `now`. It never
 /// fails, so a waiter that sweeps is never ended by it.
-pub fn deliver_due(project_root: &Path, now: DateTime<Utc>, tmux_server: Option<&str>) -> Swept {
+pub fn deliver_due(project_root: &Path, now: Timestamp, tmux_server: Option<&str>) -> Swept {
     let mut swept = Swept::default();
     let claimed = match scheduled::claim_due(project_root, now) {
         Ok(claimed) => claimed,

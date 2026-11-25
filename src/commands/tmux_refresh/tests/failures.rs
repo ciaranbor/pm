@@ -70,7 +70,11 @@ fn a_client_gone_since_the_read_fails_no_refresh() {
     let mut before = published(&server);
     before.clients.push(Client::named("client-gone"));
     let snapshot = attention::all(&projects_dir, server.name()).unwrap();
-    write(server.name(), &commands(&snapshot, &before, Utc::now())).unwrap();
+    write(
+        server.name(),
+        &commands(&snapshot, &before, jiff::Timestamp::now()),
+    )
+    .unwrap();
 
     let now = published(&server);
     assert_eq!(values(&now.sessions, &session, &[ATTENTION]), ["blocked"]);

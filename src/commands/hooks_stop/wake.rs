@@ -291,7 +291,7 @@ fn wait(
     let log = |line: &str| runtime::log_stop_hook(project_root, scope, agent, line);
     let waiter = std::process::id();
     let newest = || runtime::read_waiter(project_root, scope, agent) == Some(waiter);
-    let started = chrono::Utc::now();
+    let started = jiff::Timestamp::now();
     hooks_dialog::close_with_turn(project_root, scope, agent)?;
     runtime::take_waiter(project_root, scope, agent, waiter, busy.then_some(started))?;
     let woken_through = runtime::take_woken_through(project_root, scope, agent);

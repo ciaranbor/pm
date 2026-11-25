@@ -105,7 +105,8 @@ pub fn turn_waiter(
 /// Send the project's due scheduled sends ([`msg_scheduled`]), logging
 /// what became of each.
 fn sweep(project_root: &std::path::Path, scope: &str, agent: &str, sweeper: Sweeper<'_>) {
-    let swept = msg_scheduled::deliver_due(project_root, chrono::Utc::now(), sweeper.tmux_server);
+    let swept =
+        msg_scheduled::deliver_due(project_root, jiff::Timestamp::now(), sweeper.tmux_server);
     for line in &swept.lines {
         runtime::log_stop_hook(project_root, scope, agent, line);
     }
@@ -641,10 +642,10 @@ mod tests {
 
     /// Store a send to `recipient` in `login` that fell due a second ago.
     pub(super) fn due_send(root: &std::path::Path, recipient: &str) {
-        let now = chrono::Utc::now();
+        let now = jiff::Timestamp::now();
         let send = runtime::scheduled::Scheduled {
             id: String::new(),
-            due: now - chrono::Duration::seconds(1),
+            due: now - jiff::SignedDuration::from_secs(1),
             created: now,
             scope: "login".into(),
             recipient: recipient.into(),

@@ -106,7 +106,7 @@ mod tests {
     use crate::commands::running_agents::waiting;
     use crate::harness::Harness;
     use crate::testing::{FakeSocket, TestServer};
-    use chrono::Utc;
+    use jiff::Timestamp;
     use tempfile::tempdir;
 
     const PROMPT: &str = "[pm message] From reviewer@login: \"hi\". Run `pm msg read` to read it. \
@@ -424,17 +424,17 @@ mod tests {
     fn started_long_ago(
         server: &TestServer,
         dir: &Path,
-        active: chrono::Duration,
+        active: jiff::SignedDuration,
     ) -> (std::path::PathBuf, String) {
         let (project, target) = at_prompt(server, dir, WaitingKind::Idle);
         runtime::clear_waiting(&project, "login", "implementer").unwrap();
-        let started = Utc::now() - chrono::Duration::minutes(2);
+        let started = Timestamp::now() - jiff::SignedDuration::from_mins(2);
         runtime::mark_started(&project, "login", "implementer").unwrap();
         std::fs::File::options()
             .append(true)
             .open(paths::pm_dir(&project).join("runtime/login/implementer/started"))
             .unwrap()
-            .set_modified(started.into())
+            .set_modified(started.try_into().unwrap())
             .unwrap();
         runtime::set_activity(&project, "login", "implementer", started + active);
         (project, target)
@@ -444,7 +444,8 @@ mod tests {
     fn an_agent_active_since_its_start_is_busy_and_left_alone() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, _) = started_long_ago(&server, dir.path(), chrono::Duration::seconds(1));
+        let (project, _) =
+            started_long_ago(&server, dir.path(), jiff::SignedDuration::from_secs(1));
         let socket = posting(dir.path(), &project);
 
         let state = left_alone(&send(&server, &project));
@@ -459,7 +460,7 @@ mod tests {
     fn an_agent_whose_start_armed_no_waiter_is_re_armed_once() {
         let server = TestServer::new();
         let dir = tempdir().unwrap();
-        let (project, _) = started_long_ago(&server, dir.path(), chrono::Duration::zero());
+        let (project, _) = started_long_ago(&server, dir.path(), jiff::SignedDuration::ZERO);
         let socket = posting(dir.path(), &project);
 
         let status = send(&server, &project);
@@ -595,13 +596,13 @@ mod tests {
         let (project, _) = at_prompt(&server, dir.path(), WaitingKind::Dialog);
         let socket = posting(dir.path(), &project);
         let mut dialog = runtime::read_waiting(&project, "login", "implementer").unwrap();
-        dialog.since -= chrono::Duration::minutes(1);
+        dialog.since -= jiff::SignedDuration::from_mins(1);
         dialog.between_turns = true;
         runtime::write_waiting(&project, "login", "implementer", &dialog).unwrap();
         let transcript = dir.path().join("session.jsonl");
         let discarded = serde_json::json!({"type": "system", "subtype": "informational",
             "content": "Auto-mode proposal discarded — nothing was saved.",
-            "timestamp": Utc::now().to_rfc3339()});
+            "timestamp": Timestamp::now().to_string()});
         std::fs::write(&transcript, format!("{discarded}\n")).unwrap();
         runtime::write_session_path(
             &project,

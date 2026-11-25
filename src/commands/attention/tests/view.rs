@@ -1,4 +1,4 @@
-use chrono::Utc;
+use jiff::Timestamp;
 
 use super::*;
 use crate::state::feature::{FeatureStatus, Progress};
@@ -95,8 +95,8 @@ fn a_dead_agent_outranks_an_idle_team() {
 
 #[test]
 fn activity_is_work_then_background_work_then_a_quiet_spell_long_enough_to_matter() {
-    let now = Utc::now();
-    let ago = |minutes| Some(now - chrono::Duration::minutes(minutes));
+    let now = Timestamp::now();
+    let ago = |minutes| Some(now - jiff::SignedDuration::from_mins(minutes));
     let background = ago(1500);
     assert_eq!(
         activity(true, background, ago(1), now),

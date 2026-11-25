@@ -23,7 +23,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::attention::{self, AgentState};
@@ -48,7 +48,7 @@ struct Due {
 /// The last notice sent.
 #[derive(Serialize, Deserialize)]
 struct Sent {
-    at: DateTime<Utc>,
+    at: Timestamp,
     /// The hash of the summary it announced.
     summary: String,
     /// The feature has left ready since.
@@ -159,7 +159,7 @@ pub fn deliver(project_root: &Path, name: &str, tmux_server: Option<&str>) -> Re
     }
     std::fs::remove_file(&claimed)?;
     let record = Sent {
-        at: Utc::now(),
+        at: Timestamp::now(),
         summary: summary_hash(project_root, name),
         reopened: false,
     };
@@ -197,7 +197,7 @@ fn body(project_root: &Path, name: &str, repliable: bool) -> String {
 }
 
 /// Whether `main`'s agent has messaged any agent of `name` since `since`.
-fn main_answered_since(project_root: &Path, name: &str, since: DateTime<Utc>) -> bool {
+fn main_answered_since(project_root: &Path, name: &str, since: Timestamp) -> bool {
     let main = format!("{}@{}", scope::orchestrator(project_root), scope::MAIN);
     messages::last_sent(&paths::messages_dir(project_root), name, &main)
         .is_some_and(|at| at > since)

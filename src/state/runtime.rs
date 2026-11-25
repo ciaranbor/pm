@@ -58,7 +58,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -199,7 +199,7 @@ pub struct Waiting {
     pub kind: WaitingKind,
     /// What the harness said about it: the question, the command.
     pub detail: Option<String>,
-    pub since: DateTime<Utc>,
+    pub since: Timestamp,
     /// The harness's id for the subagent whose dialog it is; `None` for the
     /// agent's own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,7 +220,7 @@ impl Waiting {
         Self {
             kind,
             detail: detail.filter(|d| !d.trim().is_empty()),
-            since: Utc::now(),
+            since: Timestamp::now(),
             subagent: None,
             between_turns: false,
             entry: None,
@@ -384,24 +384,24 @@ pub fn touch_activity(project_root: &Path, scope: &str, agent: &str) -> Result<(
 
 /// Stamp the agent as last active at `when`.
 #[cfg(test)]
-pub(crate) fn set_activity(project_root: &Path, scope: &str, agent: &str, when: DateTime<Utc>) {
+pub(crate) fn set_activity(project_root: &Path, scope: &str, agent: &str, when: Timestamp) {
     touch_activity(project_root, scope, agent).unwrap();
     std::fs::File::options()
         .append(true)
         .open(agent_file(project_root, scope, agent, ACTIVITY_FILE))
         .unwrap()
-        .set_modified(when.into())
+        .set_modified(when.try_into().unwrap())
         .unwrap();
 }
 
 /// When the agent was last stamped active; `None` if it never was.
-pub fn last_activity(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
+pub fn last_activity(project_root: &Path, scope: &str, agent: &str) -> Option<Timestamp> {
     let file = agent_file(project_root, scope, agent, ACTIVITY_FILE);
-    Some(std::fs::metadata(file).ok()?.modified().ok()?.into())
+    Timestamp::try_from(std::fs::metadata(file).ok()?.modified().ok()?).ok()
 }
 
 /// The latest activity of any agent in the scope.
-pub fn scope_last_activity(project_root: &Path, scope: &str) -> Option<DateTime<Utc>> {
+pub fn scope_last_activity(project_root: &Path, scope: &str) -> Option<Timestamp> {
     std::fs::read_dir(scope_dir(project_root, scope))
         .ok()?
         .filter_map(|entry| {
@@ -494,14 +494,14 @@ mod tests {
             root,
             "login",
             "reviewer",
-            Utc::now() - chrono::Duration::hours(1),
+            Timestamp::now() - jiff::SignedDuration::from_hours(1),
         );
         touch_activity(root, "login", "implementer").unwrap();
 
         let reviewer = last_activity(root, "login", "reviewer").unwrap();
         let implementer = last_activity(root, "login", "implementer").unwrap();
-        assert!(Utc::now() - reviewer > chrono::Duration::minutes(59));
-        assert!(Utc::now() - implementer < chrono::Duration::minutes(1));
+        assert!(Timestamp::now() - reviewer > jiff::SignedDuration::from_mins(59));
+        assert!(Timestamp::now() - implementer < jiff::SignedDuration::from_mins(1));
         assert_eq!(scope_last_activity(root, "login"), Some(implementer));
     }
 }

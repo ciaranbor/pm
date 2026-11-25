@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{agent_dir, agent_file, registered};
@@ -37,11 +37,11 @@ pub fn take_waiter(
     scope: &str,
     agent: &str,
     pid: u32,
-    background: Option<DateTime<Utc>>,
+    background: Option<Timestamp>,
 ) -> Result<()> {
     let file = agent_dir(project_root, scope, agent)?.join(WAITER_FILE);
     let text = match background {
-        Some(since) => format!("{pid} {}", since.to_rfc3339()),
+        Some(since) => format!("{pid} {since}"),
         None => pid.to_string(),
     };
     write_atomic(&file, text.as_bytes())
@@ -61,12 +61,10 @@ pub fn read_waiter(project_root: &Path, scope: &str, agent: &str) -> Option<u32>
 }
 
 /// When the agent's waiter began waiting on background work, if it does.
-pub fn waiter_background(project_root: &Path, scope: &str, agent: &str) -> Option<DateTime<Utc>> {
+pub fn waiter_background(project_root: &Path, scope: &str, agent: &str) -> Option<Timestamp> {
     let text = waiter_file(project_root, scope, agent)?;
     let since = text.split_whitespace().nth(1)?;
-    DateTime::parse_from_rfc3339(since)
-        .ok()
-        .map(|t| t.with_timezone(&Utc))
+    since.parse().ok()
 }
 
 /// Record `detail`, what the dialog the waiter woke the agent through
@@ -162,7 +160,7 @@ pub fn log_stop_hook(project_root: &Path, scope: &str, agent: &str, line: &str) 
     }
     let line = format!(
         "{} [{}] {line}\n",
-        Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ"),
+        Timestamp::now().strftime("%Y-%m-%dT%H:%M:%S%.3fZ"),
         std::process::id()
     );
     let _ = std::fs::OpenOptions::new()
@@ -170,4 +168,27 @@ pub fn log_stop_hook(project_root: &Path, scope: &str, agent: &str, line: &str) 
         .append(true)
         .open(&file)
         .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn a_waiters_background_start_reads_back_in_either_offset_form() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        let since: Timestamp = "2026-11-25T15:51:02.760427Z".parse().unwrap();
+        take_waiter(root, "login", "reviewer", 42, Some(since)).unwrap();
+        assert_eq!(waiter_background(root, "login", "reviewer"), Some(since));
+
+        // The `+00:00` form older pm wrote, still on disk under a running waiter.
+        let file = agent_dir(root, "login", "reviewer")
+            .unwrap()
+            .join(WAITER_FILE);
+        std::fs::write(file, "42 2026-11-25T15:51:02.760427+00:00").unwrap();
+        assert_eq!(waiter_background(root, "login", "reviewer"), Some(since));
+        assert_eq!(read_waiter(root, "login", "reviewer"), Some(42));
+    }
 }

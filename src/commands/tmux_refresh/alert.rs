@@ -1,6 +1,6 @@
 //! Transition alerts and the status-line announcement that shows them.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::tmux::options::{self, Command, Options, Scope, format_text};
 
@@ -43,7 +43,7 @@ pub(super) fn alert<'a>(
 /// clearing them unless a newer announcement, with another
 /// [`ANNOUNCEMENT_ID`], has replaced them. The pair an earlier
 /// announcement set comes off first. No alerts, no change.
-pub(super) fn announce(alerts: &[Alert], published: &Options, now: DateTime<Utc>) -> Vec<Command> {
+pub(super) fn announce(alerts: &[Alert], published: &Options, now: Timestamp) -> Vec<Command> {
     if alerts.is_empty() {
         return Vec::new();
     }
@@ -59,7 +59,7 @@ pub(super) fn announce(alerts: &[Alert], published: &Options, now: DateTime<Utc>
             format_text(&format!("pm: {}", texts.join(" · ")))
         }
     };
-    let id = now.timestamp_micros().to_string();
+    let id = now.as_microsecond().to_string();
     let mut writes = Vec::new();
     for held in published
         .windows
@@ -146,7 +146,7 @@ pub(super) mod test_support {
                 .unwrap()
                 .unwrap()
         };
-        options::run(server.name(), &announce(alerts, &read(), Utc::now())).unwrap();
+        options::run(server.name(), &announce(alerts, &read(), Timestamp::now())).unwrap();
         read()
     }
 }

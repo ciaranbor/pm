@@ -478,7 +478,7 @@ mod tests {
         let own = question(root);
         let subagents = bash(root, "a1", "cargo test");
         let older_turn = Waiting {
-            since: own.dialog.since - chrono::Duration::seconds(1),
+            since: own.dialog.since - jiff::SignedDuration::from_secs(1),
             ..Waiting::now(WaitingKind::Interrupted, None)
         };
         runtime::write_waiting(root, "login", AGENT, &older_turn).unwrap();

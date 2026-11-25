@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use crate::commands::feat_common::{self, InitStateFields};
 use crate::commands::feat_delete;
@@ -325,7 +325,7 @@ pub fn feat_new(params: &FeatNewParams<'_>) -> Result<String> {
 
         // Step 5: Update status to wip
         state.status = FeatureStatus::Wip;
-        state.last_active = Utc::now();
+        state.last_active = Timestamp::now();
         state.save(&features_dir, &feature_name)?;
 
         Ok(())

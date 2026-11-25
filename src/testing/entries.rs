@@ -24,7 +24,7 @@ pub fn agent_entry(window: &str) -> AgentEntry {
 
 /// A `wip` feature on `branch`, in a worktree of the same name, created now.
 pub fn feature_state(branch: &str) -> FeatureState {
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     FeatureState {
         status: FeatureStatus::Wip,
         team: Default::default(),

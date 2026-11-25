@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use crate::commands::feat_common::{self, InitStateFields};
 use crate::commands::feat_delete;
@@ -124,7 +124,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
     if let Some(existing_wt) = git::find_worktree_for_branch(&main_worktree, branch)? {
         if params.from.is_some() {
             if existing_wt.exists() {
-                let timestamp = Utc::now().format("%Y%m%d%H%M%S");
+                let timestamp = Timestamp::now().strftime("%Y%m%d%H%M%S");
                 let mut backup = existing_wt.clone().into_os_string();
                 backup.push(format!(".bak.{timestamp}"));
                 let backup = PathBuf::from(backup);
@@ -230,7 +230,7 @@ pub fn feat_adopt(params: &FeatAdoptParams<'_>) -> Result<String> {
 
         // Step 4: Update status to wip
         state.status = FeatureStatus::Wip;
-        state.last_active = Utc::now();
+        state.last_active = Timestamp::now();
         state.save(&features_dir, &feature_name)?;
 
         Ok(())
@@ -520,7 +520,7 @@ mod tests {
         let server = TestServer::new();
         let (project_path, projects_dir, _) = server.setup_project(dir.path());
         create_branch(&project_path, "login");
-        let before = Utc::now();
+        let before = Timestamp::now();
 
         feat_adopt(&default_adopt_params(
             &project_path,

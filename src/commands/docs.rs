@@ -192,7 +192,9 @@ fn listing(listed: &[docs::Listed]) -> String {
         let state = match c.modified {
             Some(modified) if c.size > 0 => format!(
                 "updated {}",
-                modified.with_timezone(&chrono::Local).format("%Y-%m-%d")
+                modified
+                    .to_zoned_datetime(jiff::tz::TimeZone::system())
+                    .strftime("%Y-%m-%d")
             ),
             _ => "empty".to_string(),
         };

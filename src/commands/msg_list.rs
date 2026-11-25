@@ -45,7 +45,7 @@ pub fn msg_list(
         lines.push(format!(
             "  {marker}[{:03}] {} {}  {}",
             s.index,
-            s.timestamp.format("%Y-%m-%d %H:%M:%S UTC"),
+            s.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC"),
             status_tag,
             s.first_line
         ));

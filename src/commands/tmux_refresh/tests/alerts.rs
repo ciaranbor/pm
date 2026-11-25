@@ -144,7 +144,7 @@ fn the_count_is_the_sessions_that_publish_an_attention() {
         ..Options::default()
     };
 
-    let commands = commands(&snapshot, &published, Utc::now());
+    let commands = commands(&snapshot, &published, jiff::Timestamp::now());
     assert_eq!(sets(&commands, ATTENTION), ["ready"]);
     assert_eq!(sets(&commands, COUNT), ["1"]);
 }
@@ -207,7 +207,7 @@ fn a_closed_feature_alerts_once_when_it_turns_ready_but_not_on_closing_or_a_new_
             global: Holder::session("", global),
             ..Options::default()
         };
-        let commands = commands(snapshot, &published, Utc::now());
+        let commands = commands(snapshot, &published, jiff::Timestamp::now());
         let record = commands
             .iter()
             .find(|c| c[0] == "set-option" && c.iter().any(|a| a == FEATURES_ALERTED))
@@ -277,7 +277,7 @@ fn a_reopened_session_shows_a_standing_progress_without_alerting_it() {
             sessions: vec![Holder::session("app/login", &[])],
             ..Options::default()
         };
-        let commands = commands(snapshot, &published, Utc::now());
+        let commands = commands(snapshot, &published, jiff::Timestamp::now());
         (
             announced(&commands).len(),
             sets(&commands, ATTENTION).concat(),

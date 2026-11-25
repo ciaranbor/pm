@@ -54,7 +54,7 @@ pub(super) fn items(row: &Row) -> Vec<Item> {
         return Vec::new();
     };
     let at = timestamp(data.pointer("/time/created"))
-        .or_else(|| chrono::DateTime::from_timestamp_millis(row.created));
+        .or_else(|| jiff::Timestamp::from_millisecond(row.created).ok());
     let text = || {
         data.get("text")
             .and_then(Value::as_str)
@@ -99,7 +99,7 @@ pub(super) fn items(row: &Row) -> Vec<Item> {
     }
 }
 
-fn assistant(row: &Row, data: &Value, at: Option<chrono::DateTime<chrono::Utc>>) -> Vec<Item> {
+fn assistant(row: &Row, data: &Value, at: Option<jiff::Timestamp>) -> Vec<Item> {
     let parts = data
         .get("content")
         .and_then(Value::as_array)

@@ -22,14 +22,14 @@ fn open_dialogs_are_served_and_an_answer_reaches_the_hook_of_the_one_it_names() 
     };
     let post =
         |body: &serde_json::Value| call(&f.config, "POST", &agent, &token, &body.to_string());
-    let start = chrono::Utc::now();
+    let start = jiff::Timestamp::now();
     let open = |command: &str, pid: u32, after: i64| {
         let payload = serde_json::json!({
             "hook_event_name": "PermissionRequest", "tool_name": "Bash",
             "tool_input": {"command": command}
         });
         let (mut dialog, reply_context) = Harness::ClaudeCode.dialog(&payload).unwrap();
-        dialog.since = start + chrono::Duration::seconds(after);
+        dialog.since = start + jiff::SignedDuration::from_secs(after);
         let record = DialogRecord {
             dialog,
             pid: Some(pid),

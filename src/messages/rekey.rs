@@ -264,7 +264,7 @@ fn list_count(dir: &Path) -> Result<usize> {
 mod tests {
     use super::*;
     use crate::messages::{MessageMeta, check, cursor_for, list, read_at, send_meta};
-    use chrono::Utc;
+    use jiff::Timestamp;
     use tempfile::tempdir;
 
     /// Write a message the way an inbox keyed by bare name held it.
@@ -290,7 +290,7 @@ mod tests {
     fn meta(sender: &str, scope: Option<&str>) -> MessageMeta {
         MessageMeta {
             sender: sender.to_string(),
-            timestamp: Utc::now(),
+            timestamp: Timestamp::now(),
             sender_scope: scope.map(str::to_string),
             sender_project: None,
             from_outside: false,

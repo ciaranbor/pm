@@ -21,7 +21,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde_json::Value;
 
 use crate::harness::transcript::{Cache, cached, entry_id, last_entry};
@@ -30,7 +30,7 @@ use crate::state::runtime::{Waiting, WaitingKind};
 const INTERRUPTED: &str = "[Request interrupted by user";
 
 static CACHE: Cache<Waiting> = std::sync::Mutex::new(None);
-static CLOSES: Cache<DateTime<Utc>> = std::sync::Mutex::new(None);
+static CLOSES: Cache<Timestamp> = std::sync::Mutex::new(None);
 
 /// The interrupt the session whose transcript is at `path` is at, if
 /// nothing has happened in it since, dated by the transcript's mtime and
@@ -39,7 +39,7 @@ pub(in crate::harness) fn turn_ended(path: &Path) -> Option<Waiting> {
     cached(&CACHE, path, |len, mtime| {
         let interrupt = last_entry(path, len, is_turn_entry).filter(is_interrupt)?;
         Some(Waiting {
-            since: mtime.into(),
+            since: Timestamp::try_from(mtime).ok()?,
             entry: Some(entry_id(interrupt.get("uuid"), mtime)),
             ..Waiting::now(WaitingKind::Interrupted, None)
         })
@@ -48,14 +48,10 @@ pub(in crate::harness) fn turn_ended(path: &Path) -> Option<Waiting> {
 
 /// Whether the session whose transcript is at `path` recorded an entry
 /// that closed a notification-reported dialog open since `since`.
-pub(in crate::harness) fn dialog_closed(path: &Path, since: DateTime<Utc>) -> bool {
+pub(in crate::harness) fn dialog_closed(path: &Path, since: Timestamp) -> bool {
     cached(&CLOSES, path, |len, _| {
         let entry = last_entry(path, len, closes_dialog)?;
-        entry
-            .get("timestamp")?
-            .as_str()?
-            .parse::<DateTime<Utc>>()
-            .ok()
+        entry.get("timestamp")?.as_str()?.parse::<Timestamp>().ok()
     })
     .is_some_and(|closed| closed > since)
 }
@@ -154,14 +150,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("s.jsonl");
         let at = |secs: i64| {
-            DateTime::parse_from_rfc3339("2026-10-12T22:00:00Z")
-                .unwrap()
-                .to_utc()
-                + chrono::Duration::seconds(secs)
+            "2026-10-12T22:00:00Z".parse::<Timestamp>().unwrap()
+                + jiff::SignedDuration::from_secs(secs)
         };
         let entry = |json: Value, secs: i64| {
             let mut json = json;
-            json["timestamp"] = at(secs).to_rfc3339().into();
+            json["timestamp"] = at(secs).to_string().into();
             json.to_string()
         };
         let system = |subtype: &str| serde_json::json!({"type": "system", "subtype": subtype});

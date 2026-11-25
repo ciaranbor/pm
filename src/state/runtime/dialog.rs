@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -39,7 +39,7 @@ pub struct Dialog {
     pub id: String,
     /// `question`, `permission` or `plan`.
     pub kind: WaitingKind,
-    pub since: DateTime<Utc>,
+    pub since: Timestamp,
     /// The harness's id for the subagent whose dialog it is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent: Option<String>,
@@ -103,12 +103,16 @@ impl Dialog {
         let mut bytes = [0u8; 8];
         let id = match getrandom::fill(&mut bytes) {
             Ok(()) => bytes.iter().map(|b| format!("{b:02x}")).collect(),
-            Err(_) => format!("{}-{}", std::process::id(), Utc::now().timestamp_micros()),
+            Err(_) => format!(
+                "{}-{}",
+                std::process::id(),
+                Timestamp::now().as_microsecond()
+            ),
         };
         Self {
             id,
             kind,
-            since: Utc::now(),
+            since: Timestamp::now(),
             subagent: None,
             questions: Vec::new(),
             tool: None,
@@ -340,7 +344,7 @@ pub fn dialog_answered_since(
     project_root: &Path,
     scope: &str,
     agent: &str,
-    since: DateTime<Utc>,
+    since: Timestamp,
 ) -> bool {
     let Ok(entries) = std::fs::read_dir(dialogs_dir(project_root, scope, agent)) else {
         return false;
@@ -350,7 +354,7 @@ pub fn dialog_answered_since(
             && entry
                 .metadata()
                 .and_then(|m| m.modified())
-                .is_ok_and(|at| DateTime::<Utc>::from(at) >= since)
+                .is_ok_and(|at| Timestamp::try_from(at).is_ok_and(|at| at >= since))
     })
 }
 
@@ -543,7 +547,7 @@ mod tests {
         };
         let older = record(questions());
         let mut newer = record(questions());
-        newer.dialog.since = older.dialog.since + chrono::Duration::seconds(1);
+        newer.dialog.since = older.dialog.since + jiff::SignedDuration::from_secs(1);
         write_dialog(root, "login", "qa", &newer).unwrap();
         write_dialog(root, "login", "qa", &older).unwrap();
         assert_eq!(

@@ -1,7 +1,7 @@
 //! The option values a refresh publishes for a session, window, or the
 //! server.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::tmux::options::format_text;
 
@@ -19,7 +19,7 @@ use super::{
 pub(super) fn session_values(
     feature: &FeatureSnapshot,
     judged: &Judged,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Vec<(&'static str, Option<String>)> {
     let kind = feature.attention.kind;
     let needs = (kind != AttentionKind::None).then_some(kind);
@@ -64,7 +64,7 @@ pub(super) fn main_values(
     main: &ScopeSnapshot,
     orchestrator: &str,
     judged: &Judged,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Vec<(&'static str, Option<String>)> {
     let named = |name: &str| main.agents.iter().find(|a| a.name == name);
     let lead = named(orchestrator).or(main.agents.first());
@@ -107,7 +107,7 @@ pub(super) fn main_values(
 fn main_activity(
     main: &ScopeSnapshot,
     shown: Option<&AgentSnapshot>,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> Option<Activity> {
     let shown_busy = shown.is_some_and(|a| a.state == AgentState::Busy);
     attention::activity(main.working, main.background_since, main.last_activity, now)
@@ -117,7 +117,7 @@ fn main_activity(
 /// `activity` as `@pm_activity` and `@pm_activity_label`: the busy glyph,
 /// the background glyph and wait (`1d`), or the quiet spell (`2h`); then
 /// the same with words.
-fn drawn(activity: Activity, now: DateTime<Utc>) -> [String; 2] {
+fn drawn(activity: Activity, now: Timestamp) -> [String; 2] {
     match activity {
         Activity::Working => [badge::working(), badge::working_label()],
         Activity::Background(since) => {
@@ -232,10 +232,16 @@ mod tests {
             Default::default(),
         );
         let badge_of = |orchestrator| {
-            main_values("app", &main, orchestrator, &Judged::default(), Utc::now())
-                .into_iter()
-                .find(|(option, _)| *option == BADGE)
-                .and_then(|(_, value)| value)
+            main_values(
+                "app",
+                &main,
+                orchestrator,
+                &Judged::default(),
+                Timestamp::now(),
+            )
+            .into_iter()
+            .find(|(option, _)| *option == BADGE)
+            .and_then(|(_, value)| value)
         };
         assert_eq!(badge_of("boss"), Some(badge::agent(AgentState::Idle, 0)));
         assert_eq!(badge_of("main"), Some(badge::agent(AgentState::Busy, 0)));
@@ -243,8 +249,8 @@ mod tests {
 
     #[test]
     fn activity_is_drawn_with_its_glyph_and_age() {
-        let now = Utc::now();
-        let ago = |minutes| now - chrono::Duration::minutes(minutes);
+        let now = Timestamp::now();
+        let ago = |minutes| now - jiff::SignedDuration::from_mins(minutes);
         assert_eq!(
             drawn(Activity::Working, now),
             [

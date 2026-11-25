@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::commands::feat_sync::sync_one;
@@ -44,8 +44,8 @@ pub struct FeatureInfo {
     /// The `--context` brief the feature was created with.
     pub context: Option<String>,
     pub has_summary: bool,
-    pub created: DateTime<Utc>,
-    pub last_active: DateTime<Utc>,
+    pub created: Timestamp,
+    pub last_active: Timestamp,
 }
 
 #[derive(Debug, Serialize)]
@@ -151,11 +151,11 @@ pub fn feat_info(project_root: &Path, projects_dir: &Path, name: &str) -> Result
     }
     lines.push(format!(
         "created:     {}",
-        info.created.format("%Y-%m-%d %H:%M:%S UTC")
+        info.created.strftime("%Y-%m-%d %H:%M:%S UTC")
     ));
     lines.push(format!(
         "last_active: {}",
-        info.last_active.format("%Y-%m-%d %H:%M:%S UTC")
+        info.last_active.strftime("%Y-%m-%d %H:%M:%S UTC")
     ));
 
     Ok(lines)

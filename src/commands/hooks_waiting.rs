@@ -33,7 +33,7 @@ use crate::harness::{Harness, WaitingEvent};
 use crate::messages;
 use crate::state::paths;
 use crate::state::runtime::{self, Dialog, Waiting, WaitingKind};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 /// Run the hook, the agent's window on `tmux_server`. `on_change` is told
 /// the agent's new state and unread count when its marker changed, and
@@ -193,7 +193,7 @@ fn after_clear(
 ) -> Result<Option<AgentState>> {
     let open = hooks_dialog::open_dialogs(project_root, scope, agent, harness);
     let waiting = match open.first() {
-        _ if between => between_turns(project_root, scope, agent, harness, Utc::now()),
+        _ if between => between_turns(project_root, scope, agent, harness, Timestamp::now()),
         Some(open) => open.dialog.waiting(),
         None => return Ok(Some(AgentState::Busy)),
     };
@@ -229,7 +229,7 @@ pub(crate) fn between_turns(
     scope: &str,
     agent: &str,
     harness: Harness,
-    idle_since: DateTime<Utc>,
+    idle_since: Timestamp,
 ) -> Waiting {
     let waiting = match hooks_dialog::open_dialogs(project_root, scope, agent, harness).first() {
         Some(open) => open.dialog.waiting(),
@@ -374,14 +374,14 @@ mod tests {
     fn a_dialog_answered_at_the_terminal_leaves_the_marker_standing_for_the_oldest_still_open() {
         let dir = tempdir().unwrap();
         let root = dir.path();
-        let start = chrono::Utc::now();
+        let start = jiff::Timestamp::now();
         let mut opened = 0;
         let mut ask = |subagent: &str, command: &str| {
             let payload = json!({"hook_event_name": "PermissionRequest", "agent_id": subagent,
                                  "tool_name": "Bash", "tool_input": {"command": command}});
             let (mut dialog, reply_context) = Harness::ClaudeCode.dialog(&payload).unwrap();
             opened += 1;
-            dialog.since = start + chrono::Duration::seconds(opened);
+            dialog.since = start + jiff::SignedDuration::from_secs(opened);
             let record = runtime::DialogRecord {
                 dialog,
                 pid: Some(std::process::id()),
@@ -437,10 +437,10 @@ mod tests {
             };
             runtime::write_dialog(root, scope, agent, &record).unwrap();
         };
-        let waiter_since = Utc::now() - chrono::Duration::minutes(5);
+        let waiter_since = Timestamp::now() - jiff::SignedDuration::from_mins(5);
         runtime::take_waiter(root, scope, agent, std::process::id(), Some(waiter_since)).unwrap();
         let stop = || {
-            let waiting = between_turns(root, scope, agent, Harness::ClaudeCode, Utc::now());
+            let waiting = between_turns(root, scope, agent, Harness::ClaudeCode, Timestamp::now());
             runtime::write_waiting(root, scope, agent, &waiting).unwrap();
             waiting.kind
         };

@@ -166,7 +166,11 @@ fn publish(server: &OwnServer, snapshot: &Snapshot) -> Options {
             .unwrap()
             .unwrap()
     };
-    options::run(server.name(), &commands(snapshot, &read(), Utc::now())).unwrap();
+    options::run(
+        server.name(),
+        &commands(snapshot, &read(), jiff::Timestamp::now()),
+    )
+    .unwrap();
     read()
 }
 

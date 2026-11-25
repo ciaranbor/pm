@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use super::address::{matches, validate_key};
 use super::cursor;
@@ -59,7 +59,7 @@ pub fn list(
                 .collect::<String>();
 
             let timestamp = load_meta(messages_dir, feature, agent, sender, i)?
-                .map_or_else(Utc::now, |m| m.timestamp);
+                .map_or_else(Timestamp::now, |m| m.timestamp);
 
             let status = if i <= cur {
                 MessageStatus::Read

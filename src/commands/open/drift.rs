@@ -213,7 +213,7 @@ mod tests {
         let agents_dir = paths::agents_dir(&project_path);
         let mut registry = AgentRegistry::load(&agents_dir, "login").unwrap();
         registry.get_mut("reviewer").unwrap().spawned_at =
-            Some(chrono::Utc::now() - chrono::Duration::hours(1));
+            Some(jiff::Timestamp::now() - jiff::SignedDuration::from_hours(1));
         registry.save(&agents_dir, "login").unwrap();
         std::fs::File::create(
             crate::state::runtime::reset_launched(&project_path, "login", "reviewer").unwrap(),

@@ -310,7 +310,7 @@ mod tests {
         let denial = runtime::Denial {
             detail: "Bash: git clean -fdx".into(),
             reason: None,
-            since: chrono::Utc::now(),
+            since: jiff::Timestamp::now(),
             command: Some("git clean -fdx".into()),
         };
         runtime::write_denial(&project, "main", "main", &denial).unwrap();

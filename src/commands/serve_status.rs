@@ -131,8 +131,8 @@ pub fn status(home: &Path, files: &ServeFiles, port: u16, exe: &Path) -> Vec<Str
                 &s.version
             },
             s.started
-                .with_timezone(&chrono::Local)
-                .format("%Y-%m-%d %H:%M")
+                .to_zoned_datetime(jiff::tz::TimeZone::system())
+                .strftime("%Y-%m-%d %H:%M")
         ),
         None => "server:    not running".into(),
     });

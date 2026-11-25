@@ -22,7 +22,7 @@ pub enum MsgCommands {
         /// Hold the message until this long from now (e.g. 30s, 10m, 2h, 1d, 1h30m). The
         /// recipient's project's waiters deliver it, on this machine only
         #[arg(long = "in", value_name = "DURATION", value_parser = pm::commands::msg_scheduled::parse_delay)]
-        delay: Option<chrono::Duration>,
+        delay: Option<jiff::SignedDuration>,
     },
     /// List the project's scheduled sends (`pm msg send --in`), soonest due first
     Scheduled {

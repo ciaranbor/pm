@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{created, root};
@@ -24,8 +24,8 @@ const EXT: &str = ".json";
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Scheduled {
     pub id: String,
-    pub due: DateTime<Utc>,
-    pub created: DateTime<Utc>,
+    pub due: Timestamp,
+    pub created: Timestamp,
     /// The recipient's scope.
     pub scope: String,
     pub recipient: String,
@@ -42,7 +42,7 @@ pub struct Scheduled {
     /// When a delivery first failed and gave the send back for a later
     /// sweep.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retrying_since: Option<DateTime<Utc>>,
+    pub retrying_since: Option<Timestamp>,
 }
 
 /// A sender's home, as [`Home`](crate::commands::agent_send::Home) owned.
@@ -68,7 +68,7 @@ fn fresh_id() -> String {
     let mut bytes = [0u8; 3];
     match getrandom::fill(&mut bytes) {
         Ok(()) => bytes.iter().map(|b| format!("{b:02x}")).collect(),
-        Err(_) => format!("{:06x}", Utc::now().timestamp_micros() & 0xff_ffff),
+        Err(_) => format!("{:06x}", Timestamp::now().as_microsecond() & 0xff_ffff),
     }
 }
 
@@ -169,7 +169,7 @@ pub fn remove(project_root: &Path, prefix: &str) -> Result<Scheduled> {
 
 /// Claim every send due by `now` that has not failed, soonest due first:
 /// unclaimed ones, and those whose claimer died.
-pub fn claim_due(project_root: &Path, now: DateTime<Utc>) -> Result<Vec<Claimed>> {
+pub fn claim_due(project_root: &Path, now: Timestamp) -> Result<Vec<Claimed>> {
     let own = std::process::id();
     let mut claimed = Vec::new();
     for (path, send, claimer) in entries(project_root)? {
@@ -209,7 +209,7 @@ fn unclaimed_path(claimed: &Claimed) -> PathBuf {
 
 /// Give `claimed`, whose delivery failed at `now`, back for a later sweep
 /// to retry.
-pub fn retry(claimed: Claimed, now: DateTime<Utc>) -> Result<()> {
+pub fn retry(claimed: Claimed, now: Timestamp) -> Result<()> {
     let send = Scheduled {
         retrying_since: claimed.send.retrying_since.or(Some(now)),
         ..claimed.send.clone()
@@ -238,11 +238,11 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    fn send(due: DateTime<Utc>) -> Scheduled {
+    fn send(due: Timestamp) -> Scheduled {
         Scheduled {
             id: String::new(),
             due,
-            created: Utc::now(),
+            created: Timestamp::now(),
             scope: "login".into(),
             recipient: "reviewer".into(),
             sender: "implementer".into(),
@@ -257,11 +257,11 @@ mod tests {
     #[test]
     fn a_send_is_claimed_once_due_and_by_one_claimer() {
         let dir = tempdir().unwrap();
-        let now = Utc::now();
-        let stored = schedule(dir.path(), send(now + chrono::Duration::minutes(5))).unwrap();
+        let now = Timestamp::now();
+        let stored = schedule(dir.path(), send(now + jiff::SignedDuration::from_mins(5))).unwrap();
 
         assert!(claim_due(dir.path(), now).unwrap().is_empty());
-        let later = now + chrono::Duration::minutes(6);
+        let later = now + jiff::SignedDuration::from_mins(6);
         let claimed = claim_due(dir.path(), later).unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(claimed[0].send.id, stored.id);
@@ -275,7 +275,7 @@ mod tests {
     #[test]
     fn a_claim_whose_process_died_is_claimed_again() {
         let dir = tempdir().unwrap();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let stored = schedule(dir.path(), send(now)).unwrap();
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let dead = child.id();
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn a_failed_send_is_listed_but_never_claimed() {
         let dir = tempdir().unwrap();
-        let now = Utc::now();
+        let now = Timestamp::now();
         schedule(dir.path(), send(now)).unwrap();
         let claimed = claim_due(dir.path(), now).unwrap().remove(0);
         fail(claimed, "gone".into()).unwrap();
@@ -306,7 +306,7 @@ mod tests {
     }
 
     /// Store a send due `now` under `id`.
-    fn put(project_root: &Path, id: &str, now: DateTime<Utc>) -> Scheduled {
+    fn put(project_root: &Path, id: &str, now: Timestamp) -> Scheduled {
         let stored = Scheduled {
             id: id.into(),
             ..send(now)
@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn remove_takes_a_unique_prefix() {
         let dir = tempdir().unwrap();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let a = put(dir.path(), "abc123", now);
         let b = put(dir.path(), "def456", now);
 
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn a_send_being_delivered_cannot_be_cancelled_but_a_dead_claim_can() {
         let dir = tempdir().unwrap();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let stored = put(dir.path(), "abc123", now);
         let claimed = claim_due(dir.path(), now).unwrap().remove(0);
 
@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn an_ambiguous_prefix_removes_nothing() {
         let dir = tempdir().unwrap();
-        let now = Utc::now();
+        let now = Timestamp::now();
         put(dir.path(), "abc123", now);
         put(dir.path(), "abd456", now);
 

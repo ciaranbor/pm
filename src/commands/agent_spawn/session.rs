@@ -224,7 +224,7 @@ pub(super) fn spawn_session_with_config(
         active: true,
         agent_definition: stored_definition,
         harness: settings.harness,
-        spawned_at: Some(chrono::Utc::now()),
+        spawned_at: Some(jiff::Timestamp::now()),
     };
     AgentRegistry::update(
         &paths::agents_dir(params.project_root),

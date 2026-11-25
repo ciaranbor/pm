@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use super::{agent_dir, agent_file};
@@ -19,7 +19,7 @@ const LATEST_FILE: &str = "latest.json";
 pub struct Latest {
     pub text: String,
     /// When it was written, where the harness records it.
-    pub at: Option<DateTime<Utc>>,
+    pub at: Option<Timestamp>,
 }
 
 /// What [`write_latest`] recorded: the reply read at `version` of the

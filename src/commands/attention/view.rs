@@ -1,7 +1,7 @@
 //! The snapshot's types, and what a feature or a main scope needs from the
 //! user, ranked by [`AttentionKind`].
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::Serialize;
 
 use crate::state::feature::{FeatureStatus, Progress};
@@ -24,9 +24,9 @@ pub const QUIET_SECS: i64 = 10 * 60;
 pub enum Activity {
     Working,
     /// Waiting on background work since then.
-    Background(DateTime<Utc>),
+    Background(Timestamp),
     /// Quiet since then, for [`QUIET_SECS`] or more.
-    Quiet(DateTime<Utc>),
+    Quiet(Timestamp),
 }
 
 /// A scope's activity as of `now`: working, else waiting on background
@@ -34,9 +34,9 @@ pub enum Activity {
 /// turns.
 pub fn activity(
     working: bool,
-    background_since: Option<DateTime<Utc>>,
-    last_activity: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
+    background_since: Option<Timestamp>,
+    last_activity: Option<Timestamp>,
+    now: Timestamp,
 ) -> Option<Activity> {
     if working {
         return Some(Activity::Working);
@@ -45,7 +45,7 @@ pub fn activity(
         return Some(Activity::Background(since));
     }
     last_activity
-        .filter(|t| (now - *t).num_seconds() >= QUIET_SECS)
+        .filter(|t| (now - *t).as_secs() >= QUIET_SECS)
         .map(Activity::Quiet)
 }
 
@@ -85,8 +85,8 @@ pub struct ScopeSnapshot {
     pub blocked_by: Option<String>,
     pub working: bool,
     /// When the longest-waiting background agent's wait began.
-    pub background_since: Option<DateTime<Utc>>,
-    pub last_activity: Option<DateTime<Utc>>,
+    pub background_since: Option<Timestamp>,
+    pub last_activity: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -108,8 +108,8 @@ pub struct FeatureSnapshot {
     pub agents: Vec<AgentSnapshot>,
     pub working: bool,
     /// When the longest-waiting background agent's wait began.
-    pub background_since: Option<DateTime<Utc>>,
-    pub last_activity: Option<DateTime<Utc>>,
+    pub background_since: Option<Timestamp>,
+    pub last_activity: Option<Timestamp>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,7 +139,7 @@ pub struct WaitingSnapshot {
     pub kind: WaitingKind,
     pub detail: String,
     /// When the wait began; `None` for a loop that stopped itself.
-    pub since: Option<DateTime<Utc>>,
+    pub since: Option<Timestamp>,
     /// The id of the dialog, when it can be answered remotely.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dialog: Option<String>,

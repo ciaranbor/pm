@@ -15,7 +15,7 @@
 
 use std::time::Instant;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::commands::attention::AgentState;
 use crate::commands::hooks_waiting;
@@ -30,7 +30,7 @@ pub(super) struct Watch<'a, C> {
     /// Until when the screen is read with no dialog marker held; `None`
     /// for a harness whose screen it never reads.
     until: Option<Instant>,
-    idle_since: DateTime<Utc>,
+    idle_since: Timestamp,
     /// The detail of the dialog the woken turn ran through, for one the
     /// screen still shows without a title.
     carried: Option<String>,
@@ -44,7 +44,7 @@ impl<'a, C: FnMut() -> Option<String>> Watch<'a, C> {
     pub(super) fn new(
         at: AgentAt<'a>,
         carried: Option<String>,
-        idle_since: DateTime<Utc>,
+        idle_since: Timestamp,
         until: Option<Instant>,
         capture: C,
     ) -> Self {
@@ -150,7 +150,7 @@ mod tests {
         let root = dir.path();
         runtime::write_waiting(root, "login", "implementer", &idle()).unwrap();
         let screen = RefCell::new(fixture("teach-below"));
-        let mut watch = Watch::new(at(root), None, Utc::now(), open(), || {
+        let mut watch = Watch::new(at(root), None, Timestamp::now(), open(), || {
             Some(screen.borrow().clone())
         });
 
@@ -173,7 +173,7 @@ mod tests {
         let root = dir.path();
         runtime::write_waiting(root, "login", "implementer", &idle()).unwrap();
         let past = Instant::now() - std::time::Duration::from_secs(1);
-        let mut watch = Watch::new(at(root), None, Utc::now(), Some(past), || {
+        let mut watch = Watch::new(at(root), None, Timestamp::now(), Some(past), || {
             panic!("read the screen")
         });
         assert_eq!(watch.check().unwrap(), None);
@@ -189,7 +189,7 @@ mod tests {
             ..Waiting::now(WaitingKind::Permission, Some("Bash: ls".into()))
         };
         runtime::write_waiting(root, "login", "implementer", &permission).unwrap();
-        let mut watch = Watch::new(at(root), None, Utc::now(), open(), || {
+        let mut watch = Watch::new(at(root), None, Timestamp::now(), open(), || {
             Some(fixture("teach-below"))
         });
         assert_eq!(watch.check().unwrap(), None);
@@ -206,7 +206,7 @@ mod tests {
         };
         runtime::write_waiting(root, "login", "implementer", &notified).unwrap();
         let screen = RefCell::new(fixture("busy"));
-        let mut watch = Watch::new(at(root), None, Utc::now(), open(), || {
+        let mut watch = Watch::new(at(root), None, Timestamp::now(), open(), || {
             Some(screen.borrow().clone())
         });
 

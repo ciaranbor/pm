@@ -76,7 +76,7 @@ impl TeamStatus {
             let features_dir = paths::features_dir(project_root);
             let mut state = FeatureState::load(&features_dir, scope)?;
             state.team = self.clone();
-            state.last_active = chrono::Utc::now();
+            state.last_active = jiff::Timestamp::now();
             return state.save(&features_dir, scope);
         }
         crate::fs_utils::write_atomic(

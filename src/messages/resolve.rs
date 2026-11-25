@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use chrono::Utc;
+use jiff::Timestamp;
 
 use super::address;
 use super::cursor;
@@ -39,18 +39,17 @@ pub fn resolve_sender(
         .transpose()?;
 
     let csr = cursor::load_cursor(&cursor::cursor_path(messages_dir, feature, agent))?;
-    let mut dated: Vec<(Option<chrono::DateTime<Utc>>, String)> =
-        check(messages_dir, feature, agent)?
-            .into_iter()
-            .map(|s| {
-                let next = csr.get(s.sender.as_str()).copied().unwrap_or(0) + 1;
-                let sent = load_meta(messages_dir, feature, agent, &s.sender, next)
-                    .ok()
-                    .flatten()
-                    .map(|m| m.timestamp);
-                (sent, s.sender)
-            })
-            .collect();
+    let mut dated: Vec<(Option<Timestamp>, String)> = check(messages_dir, feature, agent)?
+        .into_iter()
+        .map(|s| {
+            let next = csr.get(s.sender.as_str()).copied().unwrap_or(0) + 1;
+            let sent = load_meta(messages_dir, feature, agent, &s.sender, next)
+                .ok()
+                .flatten()
+                .map(|m| m.timestamp);
+            (sent, s.sender)
+        })
+        .collect();
     dated.sort();
     let mut senders: Vec<String> = dated.into_iter().map(|(_, sender)| sender).collect();
 

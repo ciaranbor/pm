@@ -188,7 +188,7 @@ fn format_message(m: &Message, current_scope: Option<&str>) -> Vec<String> {
     };
     let is_cross_project = m.meta.sender_project.is_some();
 
-    let timestamp = m.meta.timestamp.format("%Y-%m-%d %H:%M:%S UTC");
+    let timestamp = m.meta.timestamp.strftime("%Y-%m-%d %H:%M:%S UTC");
     let note = if messages::is_no_reply(&m.sender) {
         " (sent by pm, not an agent: no one to reply to; report as `pm workflow show` says)"
     } else if m.meta.from_outside {

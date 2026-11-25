@@ -333,7 +333,7 @@ fn a_waiter_going_idle_sends_its_features_due_ready_notice_once() {
     }
     .save(&paths::pm_dir(root))
     .unwrap();
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     let mut state = FeatureState {
         status: FeatureStatus::Wip,
         branch: "login".into(),
