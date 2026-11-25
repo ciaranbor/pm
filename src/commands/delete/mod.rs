@@ -14,9 +14,11 @@ use crate::state::agent::AgentRegistry;
 use crate::state::feature::FeatureState;
 use crate::state::project::{ProjectConfig, ProjectEntry};
 use crate::state::{paths, scope};
-use crate::{gh, git, messages, tmux};
+use crate::{git, messages, tmux};
 
-use super::feat_delete::{CleanupParams, base_scope, check_safety, cleanup_feature};
+use super::feat_delete::{
+    CleanupParams, base_scope, check_safety, cleanup_feature, merged_pr_head, unshipped,
+};
 
 mod absent;
 
@@ -45,11 +47,17 @@ fn check_all_features_safety(
             main_branch,
         )?;
 
-        let pr_merged =
-            !state.pr.is_empty() && gh::pr_is_merged(&main_repo, &state.pr).unwrap_or(false);
+        let merged_head = merged_pr_head(&main_repo, &state.pr);
+        let pr_merged = merged_head.is_some();
 
         if report.has_uncommitted_changes {
             blockers.push(format!("feature '{name}' has uncommitted changes"));
+        }
+        if let Some(head) = &merged_head
+            && let Some(loss) = unshipped(&main_repo, &state.branch, &state.pr, head, "")?
+        {
+            blockers.push(format!("feature '{name}': {loss}"));
+            continue;
         }
 
         if !report.is_merged && !pr_merged {
@@ -445,6 +453,29 @@ mod tests {
         assert!(result.is_err());
 
         assert!(paths::pm_dir(&project_path).exists());
+    }
+
+    #[test]
+    fn delete_blocked_by_commits_a_merged_pr_lacks() {
+        let dir = tempdir().unwrap();
+        let server = TestServer::new();
+        let (project_path, projects_dir, _) =
+            server.setup_project_with_feature_no_tmux(dir.path(), "login");
+        TestServer::add_feature_commit(&project_path, "login");
+        let (_gh, _) = TestServer::link_merged_pr(&project_path, "login", "7");
+        let worktree = project_path.join("login");
+        TestServer::commit_file(&worktree, "later.txt", "later work");
+
+        let Err(err) = delete(&project_path, &projects_dir, false, server.name(), |_| {
+            Ok(true)
+        }) else {
+            panic!("delete went ahead");
+        };
+        let err = err.to_string();
+
+        assert!(err.contains("PR #7 lacks"), "{err}");
+        assert!(err.contains(" later work"), "{err}");
+        assert!(worktree.exists());
     }
 
     #[test]

@@ -286,17 +286,57 @@ fn a_pr_merged_on_github_without_the_local_branch_s_later_commits_is_not_cleaned
     squash_on_remote(&hub.remote, &hub.scratch);
     hub.pr.borrow_mut().state = "MERGED";
     let worktree = hub.project.join("login");
-    std::fs::write(worktree.join("later.txt"), "later").unwrap();
-    git::stage_file(&worktree, "later.txt").unwrap();
-    git::commit(&worktree, "later").unwrap();
+    TestServer::commit_file(&worktree, "later.txt", "later");
 
     let err = feat_merge(&hub.project, &hub.registry, "login", false, server.name())
         .unwrap_err()
         .to_string();
 
-    assert!(err.contains("later commits would be lost"), "{err}");
+    assert!(err.contains("PR #7 lacks"), "{err}");
+    assert!(err.contains(" later"), "{err}");
     assert!(worktree.exists());
     assert!(git::branch_exists(&hub.main, "login").unwrap());
+}
+
+/// `hub`'s PR merged on GitHub and recorded so, as `pm feat sync` does.
+fn merged_and_synced(hub: &Hub) {
+    squash_on_remote(&hub.remote, &hub.scratch);
+    hub.pr.borrow_mut().state = "MERGED";
+    let features = paths::features_dir(&hub.project);
+    let mut state = FeatureState::load(&features, "login").unwrap();
+    state.status = FeatureStatus::Merged;
+    state.save(&features, "login").unwrap();
+}
+
+#[test]
+fn a_feature_recorded_merged_keeps_commits_its_pr_lacks() {
+    let server = TestServer::new();
+    let (hub, _gh) = hub(&server, &["squash"]);
+    merged_and_synced(&hub);
+    let worktree = hub.project.join("login");
+    TestServer::commit_file(&worktree, "later.txt", "later");
+
+    let err = feat_merge(&hub.project, &hub.registry, "login", false, server.name())
+        .unwrap_err()
+        .to_string();
+
+    assert!(err.contains("PR #7 lacks"), "{err}");
+    assert!(err.contains(" later"), "{err}");
+    assert!(worktree.exists());
+    assert!(git::branch_exists(&hub.main, "login").unwrap());
+}
+
+#[test]
+fn a_feature_recorded_merged_at_its_pr_s_head_is_cleaned_up() {
+    let server = TestServer::new();
+    let (hub, gh) = hub(&server, &["squash"]);
+    merged_and_synced(&hub);
+
+    feat_merge(&hub.project, &hub.registry, "login", false, server.name()).unwrap();
+
+    assert!(merge_calls(&gh).is_empty());
+    assert!(!hub.project.join("login").exists());
+    assert!(!git::branch_exists(&hub.main, "login").unwrap());
 }
 
 #[test]

@@ -63,6 +63,9 @@ pub fn feat_merge(
     let pr_linked = !state.pr.is_empty();
     let mut warnings = Vec::new();
     if already_status_merged {
+        if pr_linked && !keep {
+            github::ensure_recorded_shipped(base_repo, &plan)?;
+        }
         eprintln!("Feature '{name}' already merged — cleaning up");
         if pr_linked {
             pull_base(base_repo, &mut tlog);

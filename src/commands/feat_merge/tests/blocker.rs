@@ -85,6 +85,8 @@ fn a_feature_already_merged_only_cleans_up_so_is_never_behind() {
             .is_some()
     );
 
+    git::merge_no_ff(&paths::main_worktree(&project), "login").unwrap();
+    commit(&paths::main_worktree(&project), "later-upstream.txt");
     let features_dir = paths::features_dir(&project);
     let mut state = FeatureState::load(&features_dir, "login").unwrap();
     state.status = FeatureStatus::Merged;

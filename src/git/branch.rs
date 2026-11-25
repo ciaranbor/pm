@@ -243,6 +243,16 @@ pub fn commits_beyond(repo: &Path, branch: &str, bases: &[&str]) -> Result<usize
         .map_err(|_| PmError::Git(format!("bad rev-list count: {output}")))
 }
 
+/// The commits `branch` has that `base` doesn't reach, newest first, each
+/// as its short hash and subject.
+pub fn commits_not_in(repo: &Path, branch: &str, base: &str) -> Result<Vec<String>> {
+    let output = run_git(
+        repo,
+        &["log", "--format=%h %s", branch, &format!("^{base}"), "--"],
+    )?;
+    Ok(output.lines().map(str::to_string).collect())
+}
+
 /// Merge a branch into the current branch with `--no-ff` (always create a merge commit).
 pub fn merge_no_ff(repo: &Path, branch: &str) -> Result<()> {
     run_git(

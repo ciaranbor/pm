@@ -9,7 +9,7 @@ mod timing;
 pub use base::{MissingBase, base_scope};
 pub(crate) use cleanup::cleanup_feature_with_timing;
 pub use cleanup::{CleanupParams, Ended, Ending, cleanup_feature};
-pub use safety::{SafetyReport, check_safety};
+pub use safety::{SafetyReport, check_safety, merged_pr_head, unshipped};
 pub use timing::TimingLog;
 
 use std::path::Path;
@@ -18,7 +18,7 @@ use crate::error::{PmError, Result};
 use crate::state::feature::{BaseCheckout, FeatureState, FeatureStatus, base_checkout};
 use crate::state::paths;
 use crate::state::project::{ProjectConfig, ProjectEntry};
-use crate::{gh, git, hooks};
+use crate::{git, hooks};
 use safety::evaluate_safety;
 
 /// Delete a feature: kill session, remove worktree, delete branch, remove state.
@@ -57,9 +57,22 @@ pub fn feat_delete(
     }
     let base_repo = &checkout.worktree;
 
-    // Check if the linked PR was merged on GitHub (handles squash merges
-    // where git can't detect the merge). Used for both safety bypass and hook.
-    let pr_merged = !state.pr.is_empty() && gh::pr_is_merged(base_repo, &state.pr).unwrap_or(false);
+    // A PR merged on GitHub stands in for git's merged and pushed checks
+    // (git can't see a squash merge), but only for the commits it has.
+    let merged_head = merged_pr_head(base_repo, &state.pr);
+    let pr_merged = merged_head.is_some();
+    if !force
+        && let Some(head) = &merged_head
+        && let Some(loss) = unshipped(base_repo, &state.branch, &state.pr, head, "")?
+    {
+        return Err(PmError::Unsafe {
+            reason: format!("feature '{name}': {loss}."),
+            cli: "Use --force to override.".to_string(),
+            remote: format!(
+                "Deleting it anyway takes `pm feat delete --force {name}` at a terminal."
+            ),
+        });
+    }
 
     // Run safety checks unless --force
     let mut warnings = Vec::new();

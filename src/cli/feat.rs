@@ -85,7 +85,8 @@ pub enum FeatCommands {
     Merge {
         /// Feature name (detected from CWD if omitted)
         name: Option<String>,
-        /// Keep the feature after merge (preserve session, worktree, branch, and state)
+        /// Keep the feature after merge (preserve session, worktree, branch, and state); a later
+        /// merge takes any commits made since
         #[arg(long)]
         keep: bool,
         #[command(flatten)]

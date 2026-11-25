@@ -353,11 +353,13 @@ on GitHub, then pulls the base and removes the PR's branch from the remote.
 It refuses a draft, closed or conflicting PR, one with failing checks or
 targeting another base, and one whose head isn't the local branch (push
 first). A PR already merged on GitHub, squashed or not, is only cleaned up,
-so a merge that stopped partway can just be run again — unless the local
-branch has commits the merged PR lacks, which cleanup would delete; then it
-refuses. **`[github] merge_method`** (`squash`, `merge` or `rebase`, project
-config) picks how; unset, it's the method GitHub preselects for you, and one
-the repo doesn't allow is refused.
+so a merge that stopped partway can just be run again. Cleanup deletes the
+local branch, so `pm feat merge`, `pm feat delete` and `pm delete` refuse
+while it has commits the merged PR lacks, and name them; this holds even for
+a feature `pm feat sync` already recorded merged. **`[github]
+merge_method`** (`squash`, `merge` or `rebase`, project config) picks how;
+unset, it's the method GitHub preselects for you, and one the repo doesn't
+allow is refused.
 
 **`[github] ship = true`** (project config, `pm config set github.ship true`)
 makes every feature ship as a GitHub PR. `pm workflow show` tells the

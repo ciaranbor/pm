@@ -4,9 +4,9 @@
 //! feature's worktree must also hold no untracked, non-ignored files: its
 //! removal after the merge would delete them, and only committed work is
 //! merged. The merge lands on whatever the base's worktree has checked out,
-//! so that must be the base branch itself. A feature already recorded
-//! merged only cleans up, so only its own worktree is checked, and not at
-//! all when it is kept.
+//! so that must be the base branch itself. A feature already merged
+//! ([`Plan::already_merged`]) only cleans up, so only its own worktree is
+//! checked, and not at all when it is kept.
 //!
 //! `pm feat merge` refuses with these checks in the CLI's words; `pm serve`
 //! runs the same ones to tell a device, in a few words, why its Merge is
@@ -32,6 +32,8 @@ pub(super) struct Plan {
     /// Git still knows the feature's worktree; one it doesn't holds no work
     /// to check, most likely after a cleanup that failed partway.
     pub live: bool,
+    /// See [`Plan::already_merged`].
+    merged: bool,
 }
 
 /// Why a merge can't start.
@@ -76,6 +78,11 @@ impl Plan {
             Ok(checkout) => git::is_worktree(&checkout.worktree, &worktree)?,
             Err(_) => false,
         };
+        let repo = paths::main_worktree(project_root);
+        let merged = state.status == FeatureStatus::Merged
+            && (!state.pr.is_empty()
+                || git::branch_commit(&repo, &state.branch)?.is_none()
+                || git::branch_merged_into(&repo, &state.branch, base)?);
         Ok(Self {
             name: name.to_string(),
             state,
@@ -84,6 +91,7 @@ impl Plan {
             checkout,
             worktree,
             live,
+            merged,
         })
     }
 
@@ -91,8 +99,11 @@ impl Plan {
         self.state.base_branch(&self.main_branch)
     }
 
+    /// Recorded merged, with nothing left to merge: a feature with no PR
+    /// whose branch has commits its base lacks (made after `--keep`) merges
+    /// again. A PR's are GitHub's to judge (the `github` module).
     pub fn already_merged(&self) -> bool {
-        self.state.status == FeatureStatus::Merged
+        self.merged
     }
 
     /// The base's checkout, or why the merge can't start; `keep` when the
