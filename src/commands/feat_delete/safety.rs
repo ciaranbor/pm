@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::error::{PmError, Result};
-use crate::git;
+use crate::{gh, git};
 
 /// Safety check results for feature deletion.
 pub struct SafetyReport {
@@ -48,6 +48,46 @@ pub fn check_safety(
         has_unpushed_commits,
         is_merged,
     })
+}
+
+/// The head commit of PR `pr` when GitHub has merged it; `None` when there
+/// is no PR, it is not merged, or `gh` can't say.
+pub fn merged_pr_head(repo: &Path, pr: &str) -> Option<String> {
+    if pr.is_empty() {
+        return None;
+    }
+    gh::pr_merge_state(repo, pr)
+        .ok()
+        .filter(|pr| pr.state == "MERGED")
+        .map(|pr| pr.head_oid)
+}
+
+/// Why deleting local `branch` would lose work PR `pr`, merged at `head`,
+/// lacks; `None` when it wouldn't, as when the branch is already gone. The
+/// commits it lacks are named, followed by `way_out`.
+pub fn unshipped(
+    repo: &Path,
+    branch: &str,
+    pr: &str,
+    head: &str,
+    way_out: &str,
+) -> Result<Option<String>> {
+    if git::branch_commit(repo, branch)?.is_none() {
+        return Ok(None);
+    }
+    if !git::has_commit(repo, head) {
+        return Ok(Some(format!(
+            "PR #{pr}'s head is not in this clone, so whether branch '{branch}' has \
+             commits it lacks is unknown — bring it here with `git fetch origin pull/{pr}/head`"
+        )));
+    }
+    let commits = git::commits_not_in(repo, branch, head)?;
+    Ok((!commits.is_empty()).then(|| {
+        format!(
+            "branch '{branch}' has commits PR #{pr} lacks, which would be lost: {}{way_out}",
+            commits.join("; ")
+        )
+    }))
 }
 
 /// Evaluate a safety report and return an error if deletion should be blocked.

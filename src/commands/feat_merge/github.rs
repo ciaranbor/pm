@@ -2,8 +2,9 @@
 //! on GitHub is the truth: one already merged there is not merged again, so
 //! a retry after any failure only finishes the job, and git ancestry, which
 //! can't see a squash or rebase merge, is never asked. A merged PR is
-//! cleaned up only if it merged into the feature's base at the local
-//! branch's commit, as cleanup deletes that branch.
+//! cleaned up only if it merged into the feature's base with every commit
+//! of the local branch, as cleanup deletes that branch; so is a feature
+//! already recorded merged, however that was learnt.
 //!
 //! An open PR merges only when it is not a draft, targets the feature's
 //! base, has no conflicts and no failing checks, and its head is the local
@@ -18,6 +19,7 @@
 
 use std::path::Path;
 
+use crate::commands::feat_delete::unshipped;
 use crate::error::{PmError, Result};
 use crate::gh::{self, MergeMethod};
 use crate::git;
@@ -34,26 +36,18 @@ pub(super) fn land(project_root: &Path, repo: &Path, plan: &Plan) -> Result<()> 
     let branch = &plan.state.branch;
     let base = plan.base();
     let pr = gh::pr_merge_state(repo, number)?;
-    let at_head = git::branch_commit(repo, branch)?.as_deref() == Some(pr.head_oid.as_str());
     match pr.state.as_str() {
         "MERGED" => {
-            let why = if pr.base_ref != base {
-                format!(
-                    "into '{}', not feature '{name}''s base '{base}'",
-                    pr.base_ref
-                )
-            } else if !at_head {
-                format!(
-                    "without branch '{branch}' as it stands here, whose later commits would be lost"
-                )
-            } else {
-                eprintln!("PR #{number} is already merged on GitHub — cleaning up");
-                return Ok(());
-            };
-            return Err(PmError::SafetyCheck(format!(
-                "PR #{number} was merged {why} — open a new PR for the rest with \
-                 `pm feat pr create {name}`, or end the feature with `pm feat delete --force {name}`"
-            )));
+            if pr.base_ref != base {
+                return Err(PmError::SafetyCheck(format!(
+                    "PR #{number} was merged into '{}', not feature '{name}''s base '{base}'{}",
+                    pr.base_ref,
+                    way_out(plan)
+                )));
+            }
+            ensure_shipped(repo, plan, &pr.head_oid)?;
+            eprintln!("PR #{number} is already merged on GitHub — cleaning up");
+            return Ok(());
         }
         "OPEN" => {}
         other => {
@@ -91,7 +85,7 @@ pub(super) fn land(project_root: &Path, repo: &Path, plan: &Plan) -> Result<()> 
             pr.failing_checks.join(", ")
         ));
     }
-    if !at_head {
+    if git::branch_commit(repo, branch)?.as_deref() != Some(pr.head_oid.as_str()) {
         return refuse(format!(
             "its head is not branch '{branch}' as it stands here — push the branch, \
              or pull what GitHub has, first"
@@ -110,6 +104,45 @@ pub(super) fn land(project_root: &Path, repo: &Path, plan: &Plan) -> Result<()> 
              queue) — run `pm feat merge {name}` again once it has"
         ))),
     }
+}
+
+/// Refuses a cleanup of `plan`'s feature, recorded merged, that would lose
+/// commits of its local branch the PR lacks. GitHub is asked only while
+/// that branch exists and its base doesn't already have it.
+pub(super) fn ensure_recorded_shipped(repo: &Path, plan: &Plan) -> Result<()> {
+    let (name, branch) = (&plan.name, &plan.state.branch);
+    if git::branch_commit(repo, branch)?.is_none()
+        || git::branch_merged_into(repo, branch, plan.base())?
+    {
+        return Ok(());
+    }
+    let pr = gh::pr_merge_state(repo, &plan.state.pr).map_err(|e| {
+        PmError::SafetyCheck(format!(
+            "cannot check that PR #{} has every commit of branch '{branch}', which cleanup \
+             deletes: {e} — end the feature anyway with `pm feat delete --force {name}`",
+            plan.state.pr
+        ))
+    })?;
+    ensure_shipped(repo, plan, &pr.head_oid)
+}
+
+/// Refuses unless `plan`'s local branch is wholly in `head`, the commit its
+/// PR merged at, as cleanup deletes the branch.
+fn ensure_shipped(repo: &Path, plan: &Plan, head: &str) -> Result<()> {
+    let state = &plan.state;
+    match unshipped(repo, &state.branch, &state.pr, head, &way_out(plan))? {
+        None => Ok(()),
+        Some(loss) => Err(PmError::SafetyCheck(loss)),
+    }
+}
+
+/// What to do about work a merged PR lacks.
+fn way_out(plan: &Plan) -> String {
+    let name = &plan.name;
+    format!(
+        " — open a new PR for the rest with `pm feat pr create {name}`, \
+         or end the feature with `pm feat delete --force {name}`"
+    )
 }
 
 /// The method to merge with: the configured one, else GitHub's default for

@@ -135,6 +135,44 @@ impl TestServer {
         crate::git::commit(&worktree, "feature work").unwrap();
     }
 
+    /// Commit a new file `file` in `worktree` with `message`.
+    pub fn commit_file(worktree: &Path, file: &str, message: &str) {
+        std::fs::write(worktree.join(file), message).unwrap();
+        crate::git::stage_file(worktree, file).unwrap();
+        crate::git::commit(worktree, message).unwrap();
+    }
+
+    /// Link `feature` to PR `pr`, which a faked GitHub reports merged at
+    /// the head the returned cell holds: at first, the feature's commit.
+    pub(crate) fn link_merged_pr(
+        project_path: &Path,
+        feature: &str,
+        pr: &'static str,
+    ) -> (
+        crate::gh::fake::Fake,
+        std::rc::Rc<std::cell::RefCell<String>>,
+    ) {
+        let features = crate::state::paths::features_dir(project_path);
+        let mut state = crate::state::feature::FeatureState::load(&features, feature).unwrap();
+        state.pr = pr.to_string();
+        state.save(&features, feature).unwrap();
+        let head = crate::git::branch_commit(&project_path.join(feature), feature)
+            .unwrap()
+            .unwrap();
+        let head = std::rc::Rc::new(std::cell::RefCell::new(head));
+        let gh = crate::gh::fake::install({
+            let head = head.clone();
+            move |args| match args {
+                ["pr", "view", n, ..] if *n == pr => Ok(serde_json::json!(
+                    {"state": "MERGED", "headRefOid": *head.borrow()}
+                )
+                .to_string()),
+                other => panic!("unexpected gh call: {other:?}"),
+            }
+        });
+        (gh, head)
+    }
+
     /// Leave a rebase paused in `worktree` with a clean tree: every replayed
     /// commit is followed by a failing `--exec`.
     pub fn pause_rebase(worktree: &Path, onto: &str) {
